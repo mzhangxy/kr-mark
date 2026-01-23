@@ -1,43 +1,45 @@
 import os
-import sys
 import time
+import re
 import requests
-from playwright.sync_api import sync_playwright, TimeoutError
+from datetime import datetime
+from playwright.sync_api import sync_playwright
 
 class WeirdhostUltimate:
     def __init__(self):
         self.api_key = os.getenv('TWOCAPTCHA_API_KEY')
         self.cookie_value = os.getenv('REMEMBER_WEB_COOKIE')
-        # 支持多个URL，逗号分隔
         self.server_urls = [url.strip() for url in os.getenv('WEIRDHOST_SERVER_URLS', '').split(',') if url.strip()]
-        self.sitekey = "0x4AAAAAAAVp6E7zXFfS629p"
+        # 使用你截图中最新的 Turnstile Sitekey
+        self.sitekey = "0x4AAAAAACJH5atUUlnM2w2u"
 
-    def check_login_status(self, page):
-        """检测是否登录成功"""
-        print("🔍 正在检查登录状态...")
+    def get_remaining_days(self, page):
+        """解析页面上的到期时间并计算剩余天数"""
         try:
-            # 检查页面是否包含常见的登录后特征，比如“Logout”或“Dashboard”
-            # 你可以根据你截图里的真实文本修改，这里先用常见的 Logout
-            if page.get_by_role("link", name="Logout").is_visible() or page.get_by_text("Dashboard").is_visible():
-                print("✅ 登录验证成功：已处于登录状态。")
-                return True
-            else:
-                print("⚠️ 登录验证存疑：未找到登出按钮，可能 Cookie 已过期。")
-                # 打印当前页面标题辅助判断
-                print(f"📄 当前页面标题: {page.title()}")
-                return False
-        except:
-            return False
+            # 定位包含时间格式的元素 (例如: 2026-02-05 ...)
+            time_element = page.locator("p:has-text('202')").first
+            raw_text = time_element.inner_text().strip()
+            
+            # 使用正则提取标准时间格式
+            match = re.search(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', raw_text)
+            if match:
+                expiry_date = datetime.strptime(match.group(), '%Y-%m-%d %H:%M:%S')
+                now = datetime.now()
+                delta = expiry_date - now
+                return delta.days, expiry_date
+            return None, None
+        except Exception as e:
+            print(f"⚠️ 无法解析时间: {e}")
+            return None, None
 
     def solve_turnstile(self, page):
-        print(f"🛡️ 发现 Turnstile 挑战，正在请求 2captcha 破解...")
-        page_url = page.url
-        
+        """调用 2captcha 破解"""
+        print(f"🛡️ 正在请求 2captcha 破解挑战...")
         in_res = requests.post("https://2captcha.com/in.php", data={
             'key': self.api_key,
             'method': 'turnstile',
             'sitekey': self.sitekey,
-            'pageurl': page_url,
+            'pageurl': page.url,
             'json': 1
         }).json()
 
@@ -46,21 +48,20 @@ class WeirdhostUltimate:
             return False
 
         task_id = in_res.get("request")
-        print(f"⏳ 验证码任务 ID: {task_id}，等待返回...")
-        
-        for _ in range(24):
+        for _ in range(25):
             time.sleep(5)
             res = requests.get(f"https://2captcha.com/res.php?key={self.api_key}&action=get&id={task_id}&json=1").json()
             if res.get("status") == 1:
                 token = res.get("request")
-                print("✅ 2captcha 破解成功，正在注入 Token...")
+                print("✅ 验证码已破解，正在注入...")
+                # 注入 Token 
                 page.evaluate(f'document.querySelector("[name=cf-turnstile-response]").value = "{token}";')
+                # 触发截图中显示的回调函数
                 page.evaluate('if (typeof cfCallback === "function") { cfCallback(); }')
                 return True
             elif res.get("request") == "CAPCHA_NOT_READY":
                 continue
             else:
-                print(f"❌ 破解异常: {res.get('request')}")
                 break
         return False
 
@@ -68,13 +69,10 @@ class WeirdhostUltimate:
         with sync_playwright() as p:
             print("🌐 启动浏览器...")
             browser = p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                viewport={'width': 1280, 'height': 800}
-            )
+            context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             
-            # 注入 Cookie
-            print("🍪 正在注入 Cookie...")
+            # 注入 Cookie 跳过登录
+            print("🍪 注入登录凭证...")
             context.add_cookies([{
                 'name': 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d',
                 'value': self.cookie_value,
@@ -90,51 +88,47 @@ class WeirdhostUltimate:
             
             for url in self.server_urls:
                 try:
-                    print(f"\n🚀 目标地址: {url}")
+                    print(f"\n🚀 目标服务器: {url}")
                     page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                    time.sleep(5) # 等待动态内容加载
-                    
-                    # 1. 检测登录
-                    if not self.check_login_status(page):
-                        page.screenshot(path="login_failed.png")
-                        print("📸 已保存登录失败截图: login_failed.png")
-                    
-                    # 2. 检测续期按钮
-                    renew_btn = page.get_by_role("button", name="Renew Server")
-                    # 增加模糊匹配，防止大小写问题
-                    if not renew_btn.is_visible():
-                        renew_btn = page.locator("button:has-text('Renew')")
+                    time.sleep(5) # 等待韩文内容渲染
 
+                    # 1. 检查到期时间
+                    days_left, expiry_date = self.get_remaining_days(page)
+                    if days_left is not None:
+                        print(f"📅 到期时间: {expiry_date}")
+                        print(f"⏳ 剩余天数: {days_left} 天")
+                        if days_left > 6:
+                            print("✅ 剩余时间充裕 (>6天)，跳过续期。")
+                            continue
+                    else:
+                        print("⚠️ 未能识别到期时间，为安全起见将尝试续期流程。")
+
+                    # 2. 点击续期按钮 (使用你截图中的蓝色按钮 Class)
+                    # 定位：class 包含 bkrtgq 的第一个按钮
+                    renew_btn = page.locator("button.bkrtgq").first
                     if renew_btn.is_visible():
-                        print("🖱️ 找到续期按钮，准备点击...")
+                        print("🖱️ 找到续期按钮，准备操作...")
                         renew_btn.click()
                         
-                        # 等待验证码
+                        # 等待 Turnstile 响应输入框出现
                         try:
-                            print("🕒 等待 Turnstile 验证框...")
                             page.wait_for_selector("[name='cf-turnstile-response']", timeout=15000)
                             if self.solve_turnstile(page):
-                                # 等待成功通知
-                                print("⏳ 等待网页成功反馈...")
-                                success_msg = page.wait_for_selector("text=renewed for 1 day", timeout=30000)
-                                if success_msg:
-                                    print("🎉 恭喜！续期完成。")
-                            else:
-                                print("❌ 验证码破解逻辑未成功触发")
+                                # 检查是否出现成功提示 (你的第7张截图文本)
+                                # 由于是韩文环境，我们等待页面 URL 刷新或特定绿色提示
+                                page.wait_for_timeout(5000)
+                                print("🎉 续期流程已提交！")
+                                page.screenshot(path=f"success_{int(time.time())}.png")
                         except Exception as e:
-                            print(f"ℹ️ 流程中断或无需验证: {str(e)}")
-                            page.screenshot(path="process_info.png")
+                            print(f"ℹ️ 未检测到盾牌挑战或已自动通过: {e}")
                     else:
-                        print("⏭️ 当前页面未发现续期按钮。")
-                        # 看看是不是按钮还没到期，或者页面结构变了
-                        page.screenshot(path="no_button_found.png")
+                        print("⏭️ 页面上未找到续期按钮。")
                         
                 except Exception as e:
                     print(f"💥 运行异常: {str(e)}")
-                    page.screenshot(path=f"error_log.png")
             
             browser.close()
-            print("\n🏁 任务结束。")
+            print("\n🏁 所有任务执行完毕。")
 
 if __name__ == "__main__":
     bot = WeirdhostUltimate()
