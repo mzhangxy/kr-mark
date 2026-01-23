@@ -2,15 +2,14 @@ name: Weirdhost Auto Renew
 
 on:
   schedule:
-    - cron: '0 17 * * *'  # 每天 UTC 1:00 (北京时间 9:00) 运行
+    - cron: '0 17 * * *'  # 每天运行
   workflow_dispatch:     # 允许手动触发
 
 jobs:
   login-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # 设置30分钟超时，避免GitHub Actions默认6小时太长
+    timeout-minutes: 30
     
-    # 授予工作流写入仓库内容的权限
     permissions:
       contents: write
     
@@ -25,14 +24,15 @@ jobs:
         
     - name: Install dependencies
       run: |
-        pip install playwright
+        # 🟢 增加安装 requests 库，用于连接 2captcha API
+        pip install playwright requests
         playwright install chromium
           
     - name: Set up WARP
       uses: fscarmen/warp-on-actions@v1.4
       with:
-        stack: dual        # Optional. Support [ ipv4, ipv6, dual ]. Default is dual.
-        mode: wireguard    # Optional. Support [ wireguard, client ]. Default is wireguard.   
+        stack: dual
+        mode: wireguard
       
     - name: Run auto renewal
       env:
@@ -40,20 +40,15 @@ jobs:
         WEIRDHOST_EMAIL: ${{ secrets.WEIRDHOST_EMAIL }}
         WEIRDHOST_PASSWORD: ${{ secrets.WEIRDHOST_PASSWORD }}
         WEIRDHOST_SERVER_URLS: ${{ secrets.WEIRDHOST_SERVER_URLS }}
+        # 🟢 必须在这里添加这个环境变量，脚本才能读取到 2captcha 的 KEY
+        TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
       run: python main.py
       
     - name: Commit README file
+      if: always() # 确保即便脚本报错也尝试记录日志
       run: |
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        
-        # 添加README文件
         git add README.md
-        
-        # 检查是否有变化需要提交
-        if git diff --cached --quiet; then
-          echo "README文件无变化，无需提交"
-        else
-          git commit -m "📝 更新运行状态: $(date +'%Y-%m-%d %H:%M:%S')"
-          git push origin HEAD:main
-        fi
+        git commit -m "Update renewal log" || echo "No changes to commit"
+        git push
