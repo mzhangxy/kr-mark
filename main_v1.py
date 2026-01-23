@@ -97,7 +97,7 @@ class WeirdhostUltimate:
                     if days_left is not None:
                         print(f"📅 到期时间: {expiry_date}")
                         print(f"⏳ 剩余天数: {days_left} 天")
-                        if days_left > 10:
+                        if days_left > 6:
                             print("✅ 剩余时间充裕 (>6天)，跳过续期。")
                             continue
                     else:
@@ -145,5 +145,6 @@ class WeirdhostUltimate:
 if __name__ == "__main__":
     bot = WeirdhostUltimate()
     bot.run()
+
 
 
