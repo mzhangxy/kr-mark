@@ -44,6 +44,13 @@ jobs:
         TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
       run: python main.py
       
+    - name: Upload Screenshots
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: playwright-screenshots
+        path: ./*.png
+    
     - name: Commit README file
       if: always() # 确保即便脚本报错也尝试记录日志
       run: |
