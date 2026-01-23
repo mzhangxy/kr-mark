@@ -110,17 +110,29 @@ class WeirdhostUltimate:
                         print("🖱️ 找到续期按钮，准备操作...")
                         renew_btn.click()
                         
-                        # 等待 Turnstile 响应输入框出现
-                        try:
-                            page.wait_for_selector("[name='cf-turnstile-response']", timeout=15000)
+                        # 1. 稍微等待，给 DOM 和 盾牌输入框 渲染时间
+                        page.wait_for_timeout(3000) 
+                        
+                        # 2. 检查验证码响应输入框（无论它是显示还是隐藏）
+                        # 你的日志显示它是 hidden 状态，所以不能用 wait_for_selector(visible=True)
+                        response_input = page.locator("[name='cf-turnstile-response']")
+                        
+                        if response_input.count() > 0:
+                            print("🕒 检测到 Turnstile 验证槽位 (Invisible 模式)...")
+                            # 调用 2captcha 破解并注入
                             if self.solve_turnstile(page):
-                                # 检查是否出现成功提示 (你的第7张截图文本)
-                                # 由于是韩文环境，我们等待页面 URL 刷新或特定绿色提示
-                                page.wait_for_timeout(5000)
-                                print("🎉 续期流程已提交！")
-                                page.screenshot(path=f"success_{int(time.time())}.png")
-                        except Exception as e:
-                            print(f"ℹ️ 未检测到盾牌挑战或已自动通过: {e}")
+                                # 3. 注入后强制多等几秒，确保网页执行完 cfCallback 逻辑
+                                print("⏳ 注入成功，等待系统响应...")
+                                page.wait_for_timeout(7000)
+                                print("🎉 续期操作已完成！")
+                                page.screenshot(path=f"after_solve_{int(time.time())}.png")
+                            else:
+                                print("❌ 验证码破解失败或超时。")
+                        else:
+                            # 如果点完按钮根本没出现输入框，说明该次请求可能完全不需要验证
+                            print("ℹ️ 未发现验证码输入框，可能已直接通过验证。")
+                            page.wait_for_timeout(3000)
+                            page.screenshot(path=f"no_captcha_needed_{int(time.time())}.png")
                     else:
                         print("⏭️ 页面上未找到续期按钮。")
                         
@@ -133,4 +145,5 @@ class WeirdhostUltimate:
 if __name__ == "__main__":
     bot = WeirdhostUltimate()
     bot.run()
+
 
