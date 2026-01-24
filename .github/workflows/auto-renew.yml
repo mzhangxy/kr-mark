@@ -37,8 +37,8 @@ jobs:
     - name: Run auto renewal
       env:
         REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
-        WEIRDHOST_EMAIL: ${{ secrets.WEIRDHOST_EMAIL }}
-        WEIRDHOST_PASSWORD: ${{ secrets.WEIRDHOST_PASSWORD }}
+        #WEIRDHOST_EMAIL: ${{ secrets.WEIRDHOST_EMAIL }}
+        #WEIRDHOST_PASSWORD: ${{ secrets.WEIRDHOST_PASSWORD }}
         WEIRDHOST_SERVER_URLS: ${{ secrets.WEIRDHOST_SERVER_URLS }}
         # 🟢 必须在这里添加这个环境变量，脚本才能读取到 2captcha 的 KEY
         TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
@@ -53,11 +53,11 @@ jobs:
         name: playwright-screenshots
         path: ./*.png
     
-    - name: Commit README file
-      if: always() # 确保即便脚本报错也尝试记录日志
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        git add README.md
-        git commit -m "Update renewal log" || echo "No changes to commit"
-        git push
+    #- name: Commit README file
+      #if: always() # 确保即便脚本报错也尝试记录日志
+      #run: |
+        #git config user.name "github-actions[bot]"
+        #git config user.email "github-actions[bot]@users.noreply.github.com"
+        #git add README.md
+        #git commit -m "Update renewal log" || echo "No changes to commit"
+        #git push
