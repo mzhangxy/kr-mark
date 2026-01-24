@@ -77,4 +77,84 @@ class WeirdhostUltimate:
             if res.get("request") != "CAPCHA_NOT_READY": break
         return False
 
-    def run
+    def run(self):
+        with sync_playwright() as p:
+            print("🌐 启动浏览器...")
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={'width': 1280, 'height': 800}
+            )
+            
+            # 自动识别旧 Cookie 的完整 Name（如果环境变量只提供了 Value）
+            cookie_name = 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d'
+            
+            context.add_cookies([{
+                'name': cookie_name,
+                'value': self.cookie_value,
+                'domain': 'hub.weirdhost.xyz',
+                'path': '/',
+                'expires': int(time.time()) + 31536000,
+                'httpOnly': True, 'secure': True, 'sameSite': 'Lax'
+            }])
+
+            page = context.new_page()
+            
+            # --- 业务逻辑开始 ---
+            for url in self.server_urls:
+                srv_id = url.split('/')[-1]
+                try:
+                    print(f"\n🚀 目标服务器: {url}")
+                    page.goto(url, wait_until="networkidle", timeout=60000)
+                    page.wait_for_timeout(5000) 
+
+                    days_left, expiry_date = self.get_remaining_days(page)
+                    time_str = expiry_date.strftime('%Y-%m-%d') if expiry_date else "未知"
+                    
+                    if days_left is not None and days_left > 6:
+                        self.results.append(f"🖥 `Server:{srv_id}`\n📅 到期:{time_str}\n✅ 剩余{days_left}天，无需操作")
+                        continue
+                    
+                    renew_btn = page.locator("button:has-text('시간추가')").first
+                    if not renew_btn.is_visible():
+                        renew_btn = page.locator("button.bkrtgq").first
+
+                    if renew_btn.is_visible():
+                        renew_btn.click()
+                        page.wait_for_timeout(3000) 
+                        if page.locator("[name='cf-turnstile-response']").count() > 0:
+                            if self.solve_turnstile(page):
+                                page.wait_for_timeout(7000)
+                                self.results.append(f"🖥 `Server:{srv_id}`\n📅 到期:{time_str}\n🎉 续期操作成功")
+                            else:
+                                self.results.append(f"🖥 `Server:{srv_id}`\n❌ 验证码破解失败")
+                        else:
+                            self.results.append(f"🖥 `Server:{srv_id}`\n✅ 续期完成 (免验证)")
+                    else:
+                        page.screenshot(path=f"missing_btn_{srv_id}.png")
+                        self.results.append(f"🖥 `Server:{srv_id}`\n❌ 未找到续期按钮")
+                except Exception as e:
+                    self.results.append(f"🖥 `Server:{srv_id}`\n💥 异常: {str(e)[:50]}")
+
+            # --- Cookie 检查逻辑 ---
+            print("🔍 检查 Cookie 状态...")
+            new_cookie_val = None
+            current_cookies = context.cookies()
+            for ck in current_cookies:
+                if ck['name'].startswith('remember_web_'):
+                    if ck['value'] != self.cookie_value:
+                        new_cookie_val = ck['value']
+                        break
+            
+            if new_cookie_val:
+                self.results.append(f"🔄 *检测到 Cookie 更新*\n新的凭证已产生，请更新 Secret：\n`{new_cookie_val}`")
+            
+            browser.close()
+            
+            if self.results:
+                report = "🤖 *Weirdhost 运行报告*\n\n" + "\n\n".join(self.results)
+                self.send_tg_notification(report)
+
+if __name__ == "__main__":
+    bot = WeirdhostUltimate()
+    bot.run()
