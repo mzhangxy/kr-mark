@@ -1,0 +1,54 @@
+name: Weirdhost Auto Renew
+
+on:
+  schedule:
+    - cron: '0 17 */2 * *'  # 每2天运行
+  workflow_dispatch:     # 允许手动触发
+
+jobs:
+  auto-renew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        # 🟢 增加安装 requests 库，用于连接 2captcha API
+        pip install playwright requests
+        playwright install chromium
+          
+    - name: Set up WARP
+      uses: fscarmen/warp-on-actions@v1.4
+      with:
+        stack: dual
+        mode: wireguard
+      
+    - name: Run Script
+      env:
+        TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
+        REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
+        WEIRDHOST_SERVER_URLS: ${{ secrets.WEIRDHOST_SERVER_URLS }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: python main.py
+
+    - name: Commit and Push if Cookie Changed
+      run: |
+        git config --local user.email "actions@github.com"
+        git config --local user.name "GitHub Action"
+        if [ -f session_cookie.txt ]; then
+          git add session_cookie.txt
+          git commit -m "chore: update session cookie [skip ci]" || echo "No changes to commit"
+          git push
+        fi
