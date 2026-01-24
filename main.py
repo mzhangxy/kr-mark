@@ -27,6 +27,26 @@ class WeirdhostUltimate:
 
     def get_remaining_days(self, page):
         try:
+            # 使用更宽泛的正则，只要包含 202x-xx-xx 就能抓到
+            # 增加 10 秒等待确保异步内容加载
+            target = page.get_by_text(re.compile(r"202\d-\d{2}-\d{2}")).first
+            target.wait_for(state="visible", timeout=10000)
+            
+            raw_text = target.inner_text()
+            # 提取时间部分：2026-02-01 17:20:57
+            match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', raw_text)
+            if match:
+                expiry_date = datetime.strptime(match.group(1), '%Y-%m-%d %H:%M:%S')
+                now = datetime.now()
+                delta = expiry_date - now
+                return delta.days, expiry_date
+        except Exception as e:
+            print(f"⚠️ 时间解析提示: {e}")
+        return None, None
+    
+    """
+    def get_remaining_days(self, page):
+        try:
             # 优化：直接寻找包含 202x-xx-xx 格式的文本节点
             time_text = page.locator("text=/202\d-\d{2}-\d{2}/").first.inner_text()
             match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', time_text)
@@ -38,6 +58,7 @@ class WeirdhostUltimate:
         except Exception as e:
             print(f"⚠️ 时间解析失败: {e}")
         return None, None
+    """
 
     def solve_turnstile(self, page):
         print(f"🛡️ 正在请求 2captcha...")
