@@ -103,45 +103,69 @@ class WeirdhostUltimate:
             
             for url in self.server_urls:
                 srv_id = url.split('/')[-1]
-                try:
-                    self.log(f"\n🚀 目标: {url}")
-                    page.goto(url, wait_until="networkidle", timeout=60000)
-                    page.wait_for_timeout(5000) 
+                # 尝试次数
+                max_retries = 2
+                for attempt in range(max_retries):
+                    try:
+                        self.log(f"\n🚀 目标: {url} (尝试 {attempt + 1}/{max_retries})")
+                        # 降低等待级别，增加容错
+                        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                        self.log("⏳ 页面基础 HTML 已加载，等待渲染...")
+                        page.wait_for_timeout(8000) # 强制等待 8 秒确保 JS 执行完毕
 
-                    days_left, expiry_date = self.get_remaining_days(page)
-                    time_str = expiry_date.strftime('%Y-%m-%d %H:%M') if expiry_date else "未知"
-                    
-                    if days_left is not None:
-                        self.log(f"📅 剩余 {days_left} 天 (到期: {time_str})")
-                        if days_left > 6:
-                            self.log("✅ 时间充足，跳过续期。")
-                            self.results.append(f"🖥 `Server:{srv_id}`\n📅 到期:{time_str}\n✅ 剩余{days_left}天，无需操作")
-                            continue
-                    
-                    self.log("🖱️ 正在定位 '시간추가' 按钮...")
-                    renew_btn = page.locator("button:has-text('시간추가')").first
-                    if not renew_btn.is_visible():
-                        renew_btn = page.locator("button.bkrtgq").first
+                        # 1. 检测时间
+                        days_left, expiry_date = self.get_remaining_days(page)
+                        if days_left is None and expiry_date is None:
+                            # 如果没认出时间，可能是没加载完，再多等几秒
+                            self.log("🤔 未识别到时间，尝试额外等待...")
+                            page.wait_for_timeout(5000)
+                            days_left, expiry_date = self.get_remaining_days(page)
 
-                    if renew_btn.is_visible():
-                        self.log("🔘 点击按钮...")
-                        renew_btn.click()
-                        page.wait_for_timeout(3000) 
-                        if page.locator("[name='cf-turnstile-response']").count() > 0:
-                            self.log("🕒 触发验证码破解...")
-                            if self.solve_turnstile(page):
-                                page.wait_for_timeout(7000)
-                                self.log("🎉 续期指令发送完成。")
-                                self.results.append(f"🖥 `Server:{srv_id}`\n📅 到期:{time_str}\n🎉 续期操作成功")
+                        time_str = expiry_date.strftime('%Y-%m-%d %H:%M') if expiry_date else "未知"
+                        
+                        if days_left is not None:
+                            self.log(f"📅 剩余 {days_left} 天 (到期: {time_str})")
+                            if days_left > 6:
+                                self.log("✅ 时间充足，跳过续期。")
+                                self.results.append(f"🖥 `Server:{srv_id}`\n📅 到期:{time_str}\n✅ 剩余{days_left}天，无需操作")
+                                break # 成功处理，跳出重试循环
+                        
+                        # 2. 定位并点击续期按钮
+                        self.log("🖱️ 正在定位 '시간추가' 按钮...")
+                        renew_btn = page.locator("button:has-text('시간추가')").first
+                        if not renew_btn.is_visible():
+                            renew_btn = page.locator("button.bkrtgq").first
+
+                        if renew_btn.is_visible():
+                            self.log("🔘 点击按钮...")
+                            renew_btn.click()
+                            page.wait_for_timeout(3000) 
+                            if page.locator("[name='cf-turnstile-response']").count() > 0:
+                                self.log("🕒 触发验证码破解...")
+                                if self.solve_turnstile(page):
+                                    page.wait_for_timeout(7000)
+                                    self.log("🎉 续期指令发送完成。")
+                                    self.results.append(f"🖥 `Server:{srv_id}`\n📅 到期:{time_str}\n🎉 续期操作成功")
+                            else:
+                                self.results.append(f"🖥 `Server:{srv_id}`\n✅ 续期完成 (免验证)")
                         else:
-                            self.results.append(f"🖥 `Server:{srv_id}`\n✅ 续期完成 (免验证)")
-                    else:
-                        self.log("⏭️ 未找到按钮，截图记录。")
-                        page.screenshot(path=f"missing_btn_{srv_id}.png")
-                        self.results.append(f"🖥 `Server:{srv_id}`\n❌ 未找到续期按钮")
-                except Exception as e:
-                    self.log(f"💥 异常: {e}")
-                    self.results.append(f"🖥 `Server:{srv_id}`\n💥 异常: {str(e)[:50]}")
+                            # 即使没找到按钮，只要识别到了时间且>6天，逻辑其实也是对的
+                            # 但如果没识别到时间也找不到按钮，就需要截图诊断
+                            self.log("⏭️ 未找到按钮，截图诊断。")
+                            page.screenshot(path=f"diag_{srv_id}_{int(time.time())}.png")
+                            self.results.append(f"🖥 `Server:{srv_id}`\n❌ 未找到续期按钮 (已截图诊断)")
+                        
+                        break # 成功完成本服务器逻辑，跳出重试循环
+
+                    except Exception as e:
+                        self.log(f"💥 第 {attempt + 1} 次尝试失败: {e}")
+                        # 异常时立即截图
+                        diag_path = f"error_{srv_id}_retry_{attempt+1}.png"
+                        page.screenshot(path=diag_path)
+                        self.log(f"📸 已保存异常截图: {diag_path}")
+                        
+                        if attempt == max_retries - 1:
+                            self.results.append(f"🖥 `Server:{srv_id}`\n💥 访问超时/异常: {str(e)[:40]}")
 
             # --- 检查并保存新 Cookie ---
             self.log("\n🔍 检查 Cookie 变化...")
