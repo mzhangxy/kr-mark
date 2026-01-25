@@ -19,81 +19,77 @@ class WeirdhostProxyMaster:
     def log(self, msg):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
-    def send_tg(self, message):
-        if not self.tg_token: return
-        url = f"https://api.telegram.org/bot{self.tg_token}/sendMessage"
-        try:
-            requests.post(url, json={"chat_id": self.tg_chat_id, "text": f"🤖 **Weirdhost 报告**\n\n{message}", "parse_mode": "Markdown"}, timeout=10)
-        except: pass
-
     def run(self):
-        self.log("🌐 启动 SeleniumBase (使用 10808 代理)...")
-        # 强制开启代理
+        self.log("🌐 启动 SeleniumBase (10808 代理)...")
         driver = Driver(uc=True, headless2=True, proxy="127.0.0.1:10808")
         
         try:
-            # 1. 验证代理连接
-            self.log("📡 验证代理连接性...")
+            # 1. 验证代理
+            self.log("📡 验证出口 IP...")
             try:
-                driver.get("https://www.google.com/generate_204", timeout=15)
-                self.log("✅ 代理网络连接正常")
-            except Exception as e:
-                self.log(f"❌ 代理连接失败: {e}")
-                # 即使失败也继续尝试，有时只是 google 访问不了
+                driver.get("https://api.ipify.org")
+                time.sleep(5)
+                ip = driver.get_text("body")
+                self.log(f"✅ 代理已通，当前 IP: {ip}")
+            except Exception:
+                self.log("❌ 代理请求失败，尝试直接访问目标...")
 
             for url in self.server_urls:
                 srv_id = url.split('/')[-1]
-                self.log(f"\n🚀 开始处理服务器: {srv_id}")
+                self.log(f"\n🚀 处理服务器: {srv_id}")
                 
-                # --- 修复 Cookie Domain 错误的关键步骤 ---
-                # A. 先打开目标域名的一个页面（甚至是 404 页也行）
-                self.log("🔗 正在进入域名上下文...")
-                driver.get("https://hub.weirdhost.xyz/login") 
-                time.sleep(5)
+                # 2. 强力进入域名上下文
+                self.log("🔗 进入域名中...")
+                driver.get("https://hub.weirdhost.xyz/login")
+                time.sleep(8)
                 
-                # B. 现在域名匹配了，注入 Cookie
-                self.log("🔑 注入 Session Cookie...")
+                # 检查是否真的进入了该域名（防止代理报错页）
+                if "weirdhost.xyz" not in driver.current_url:
+                    self.log(f"⚠️ 域名不匹配: {driver.current_url}")
+                    # 如果代理不通，这里很可能是 chrome-error://...
+                
+                # 3. 注入 Cookie
+                self.log("🔑 注入 Cookie...")
                 try:
                     driver.add_cookie({
                         'name': self.cookie_name, 
                         'value': self.current_cookie, 
-                        'domain': 'hub.weirdhost.xyz',
-                        'path': '/'
+                        'domain': 'hub.weirdhost.xyz'
                     })
+                    self.log("✅ Cookie 注入尝试完成")
                 except Exception as e:
-                    self.log(f"⚠️ Cookie 注入异常: {e}")
+                    self.log(f"❌ Cookie 注入失败: {e}")
 
-                # C. 再次跳转到具体的管理页面
+                # 4. 再次访问目标
                 driver.get(url)
-                time.sleep(12)
+                time.sleep(10)
                 
-                # 2. 检查页面状态
+                # 5. 判定
                 source = driver.page_source
                 if "시간추가" in source or re.search(r'202\d-\d{2}-\d{2}', source):
-                    self.log("✅ 已进入管理后台")
-                    
-                    # 查找续期按钮
+                    self.log("✅ 成功进入后台")
                     for sel in ['button.bkrtgq', 'button:contains("시간추가")']:
                         if driver.is_element_visible(sel):
-                            self.log("🔘 执行点击续期...")
                             driver.click(sel)
                             time.sleep(5)
-                            self.results.append(f"🖥 `Server:{srv_id}`\n🎉 续期成功 (代理模式)")
+                            self.results.append(f"🖥 `{srv_id}`: 续期成功")
                             break
                     else:
-                        self.results.append(f"🖥 `Server:{srv_id}`\n✅ 状态正常，无需操作")
+                        self.results.append(f"🖥 `{srv_id}`: 已进后台，无需续期")
                 else:
-                    self.log("🛡️ 未见后台内容，可能触发了 CF 验证...")
-                    driver.save_screenshot(f"FAIL_{srv_id}.png")
-                    self.results.append(f"🖥 `Server:{srv_id}`\n🚫 进入后台失败，查看截图")
+                    self.log("🛡️ 状态异常")
+                    driver.save_screenshot(f"STATUS_{srv_id}.png")
+                    self.results.append(f"🖥 `{srv_id}`: 失败 (代理/验证问题)")
 
         except Exception as e:
-            self.log(f"💥 运行异常: {e}")
-            driver.save_screenshot("CRITICAL_ERROR.png")
+            self.log(f"💥 异常: {e}")
         finally:
             driver.quit()
             if self.results:
-                self.send_tg("\n\n".join(self.results))
+                msg = "\n".join(self.results)
+                if self.tg_token:
+                    requests.post(f"https://api.telegram.org/bot{self.tg_token}/sendMessage", 
+                                 json={"chat_id": self.tg_chat_id, "text": msg})
 
 if __name__ == "__main__":
     bot = WeirdhostProxyMaster()
