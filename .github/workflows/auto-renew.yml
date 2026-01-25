@@ -1,53 +1,58 @@
 name: Weirdhost Auto Renewal
 
 on:
+  workflow_dispatch: # 手动触发
   schedule:
-    - cron: '0 18 * * *' # 每天凌晨 2 点(北京时间)运行
-  workflow_dispatch: # 支持手动运行
-
-permissions:
-  contents: write # 必须赋予写权限以保存 cookie 文件
+    - cron: '0 10 * * *' # 每天北京时间 18:00 运行 (UTC 10:00)
 
 jobs:
   renew:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
-      - name: Install dependencies
+      - name: Install System Dependencies
         run: |
-          pip install playwright requests
-          playwright install chromium --with-deps
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
 
-      - name: Run main script
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install seleniumbase requests
+          # 执行 seleniumbase 的驱动安装命令，这是 uc 模式运行的关键
+          sbase install chromedriver
+
+      - name: Run Renewal Script
         env:
+          # 基础配置
           TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
           REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
           WEIRDHOST_SERVER_URLS: ${{ secrets.WEIRDHOST_SERVER_URLS }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          
+          # Telegram 通知配置
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          
+          # 如果你的脚本需要 Searcade 的账号密码也可以配置在这里
+          USER_EMAIL: ${{ secrets.USER_EMAIL }}
+          USER_PASSWORD: ${{ secrets.USER_PASSWORD }}
         run: python main.py
 
-      - name: Commit and Push Cookie
-        run: |
-          git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Action"
-          if [ -f session_cookie.txt ]; then
-            git add session_cookie.txt
-            git commit -m "chore: update session cookie [skip ci]" || echo "No changes to commit"
-            git push
-          fi
-
       - name: Upload Debug Screenshots
-        if: always() # 无论成功失败都会上传图片
+        if: always() # 无论成功还是失败都上传截图用于调试
         uses: actions/upload-artifact@v4
         with:
           name: debug-screenshots
-          path: ./*.png # 匹配根目录所有截图
-          retention-days: 1
+          path: |
+            *.png
+            session_cookie.txt
+          retention-days: 3
