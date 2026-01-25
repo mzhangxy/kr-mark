@@ -22,13 +22,13 @@ class WeirdhostUltimate:
     def send_tg(self, message):
         if not self.tg_token: return
         url = f"https://api.telegram.org/bot{self.tg_token}/sendMessage"
-        requests.post(url, json={"chat_id": self.tg_chat_id, "text": f"🤖 **Weirdhost 助手**\n\n{message}", "parse_mode": "Markdown"})
+        try:
+            requests.post(url, json={"chat_id": self.tg_chat_id, "text": f"🤖 **Weirdhost 续期助手**\n\n{message}", "parse_mode": "Markdown"}, timeout=10)
+        except: pass
 
     def solve_cf_with_2captcha(self, driver):
-        """如果 SeleniumBase 也没能自动过，就手动调用 2captcha 补刀"""
         try:
-            self.log("🛡️ 尝试使用 2Captcha 辅助破盾...")
-            # 获取当前页面的 sitekey (Weirdhost 固定为这个)
+            self.log("🛡️ 正在调用 2Captcha 辅助破解...")
             sitekey = "0x4AAAAAACJH5atUUlnM2w2u"
             res = requests.post("https://2captcha.com/in.php", data={
                 'key': self.api_key, 'method': 'turnstile', 'sitekey': sitekey,
@@ -42,62 +42,72 @@ class WeirdhostUltimate:
                     res_get = requests.get(f"https://2captcha.com/res.php?key={self.api_key}&action=get&id={task_id}&json=1").json()
                     if res_get.get("status") == 1:
                         token = res_get.get("request")
-                        # 执行 JS 注入 Token 并回调
                         driver.execute_script(f'document.querySelector("[name=cf-turnstile-response]").value = "{token}";')
                         driver.execute_script('if(typeof cfCallback === "function") cfCallback();')
-                        self.log("✅ 补刀 Token 已提交")
+                        driver.execute_script('if(typeof turnstileCallback === "function") turnstileCallback();')
                         return True
-        except Exception as e:
-            self.log(f"⚠️ 2Captcha 辅助失败: {e}")
+        except: pass
         return False
 
     def run(self):
-        # 1. 启动具有 UC 模式的驱动
         self.log("🌐 启动 SeleniumBase UC 模式...")
+        # uc=True 抹除爬虫特征，headless2=True 模拟真实浏览器渲染
         driver = Driver(uc=True, headless2=True)
         
         try:
             for url in self.server_urls:
                 srv_id = url.split('/')[-1]
-                self.log(f"\n🚀 目标: {url}")
+                self.log(f"\n🚀 目标服务器: {srv_id}")
                 
-                # 2. 先访问域名以建立上下文，然后注入 Cookie
+                # 1. 注入 Cookie
                 driver.get("https://hub.weirdhost.xyz/")
-                driver.add_cookie({
-                    'name': self.cookie_name, 
-                    'value': self.current_cookie,
-                    'domain': 'hub.weirdhost.xyz'
-                })
+                driver.add_cookie({'name': self.cookie_name, 'value': self.current_cookie, 'domain': 'hub.weirdhost.xyz'})
                 
-                # 3. 访问具体服务器页面
+                # 2. 访问页面并过盾
                 driver.get(url)
-                time.sleep(10) # 给 UC 模式一点自动过盾的时间
+                time.sleep(10)
                 
-                # 4. 检查是否还在盾牌页
                 if "Verify you are human" in driver.page_source:
-                    self.log("🛡️ UC 模式自动过盾未触发，启动 2Captcha 补刀...")
-                    self.solve_cf_with_2captcha(driver)
-                    time.sleep(8)
+                    if not self.solve_cf_with_2captcha(driver):
+                        self.log("❌ 补刀失败")
+                        continue
+                    time.sleep(10)
+
+                # 3. 核心：执行续期逻辑
+                self.log("🧐 正在分析页面状态...")
+                page_source = driver.page_source
                 
-                # 5. 确认是否进入后台
-                if "시간추가" in driver.page_source or "202" in driver.page_source:
-                    self.log("✅ 已成功进入管理页面")
+                # 检查日期，确认是否真的进门了
+                date_match = re.search(r'202\d-\d{2}-\d{2}', page_source)
+                if date_match:
+                    self.log(f"📅 发现到期时间: {date_match.group()}")
                     
-                    # 检查是否需要续期 (寻找按钮)
-                    if driver.is_element_visible('button:contains("시간추가")'):
-                        self.log("🔘 点击续期按钮...")
-                        driver.click('button:contains("시간추가")')
-                        time.sleep(5)
-                        self.results.append(f"🖥 `Server:{srv_id}`\n🎉 续期成功！")
-                    else:
-                        self.results.append(f"🖥 `Server:{srv_id}`\n✅ 状态正常，无需续期")
+                    # 尝试多种方式定位续期按钮
+                    # 方式A: 包含指定文字的按钮
+                    # 方式B: 截图显示的特定类名 .bkrtgq
+                    btn_found = False
+                    for selector in ['button:contains("시간추가")', 'button.bkrtgq', 'button:contains("Add Time")']:
+                        if driver.is_element_visible(selector):
+                            self.log(f"🔘 找到按钮 ({selector})，正在点击...")
+                            driver.click(selector)
+                            time.sleep(5)
+                            # 点击后可能会有新的 CF 挑战，再次尝试过盾
+                            if "Verify you are human" in driver.page_source:
+                                self.solve_cf_with_2captcha(driver)
+                                time.sleep(5)
+                            self.results.append(f"🖥 `Server:{srv_id}`\n🎉 续期动作已执行")
+                            btn_found = True
+                            break
+                    
+                    if not btn_found:
+                        self.results.append(f"🖥 `Server:{srv_id}`\n✅ 已进入后台，但未发现续期按钮（可能时间还充裕）")
                 else:
-                    self.log("❌ 依旧无法越过 Cloudflare")
-                    driver.save_screenshot(f"FAIL_{srv_id}.png")
-                    self.results.append(f"🖥 `Server:{srv_id}`\n❌ 破盾失败")
+                    self.log("❌ 未能在页面找到日期，可能破盾后未正确跳转")
+                    driver.save_screenshot(f"ERROR_PAGE_{srv_id}.png")
+                    self.results.append(f"🖥 `Server:{srv_id}`\n❌ 页面加载失败")
 
         except Exception as e:
-            self.log(f"💥 发生错误: {e}")
+            self.log(f"💥 运行异常: {e}")
         finally:
             driver.quit()
             if self.results:
