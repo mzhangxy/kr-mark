@@ -8,8 +8,8 @@ from seleniumbase import Driver
 class WeirdhostProxyMaster:
     def __init__(self):
         self.api_key = os.getenv('TWOCAPTCHA_API_KEY')
-        self.tg_token = os.getenv('TELEGRAM_BOT_TOKEN')
-        self.tg_chat_id = os.getenv('TELEGRAM_CHAT_ID')
+        self.tg_token = os.getenv('TG_BOT_TOKEN')
+        self.tg_chat_id = os.getenv('TG_CHAT_ID')
         self.server_urls = [url.strip() for url in os.getenv('WEIRDHOST_SERVER_URLS', '').split(',') if url.strip()]
         
         self.cookie_name = 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d'
@@ -23,87 +23,73 @@ class WeirdhostProxyMaster:
         if not self.tg_token: return
         url = f"https://api.telegram.org/bot{self.tg_token}/sendMessage"
         try:
-            requests.post(url, json={"chat_id": self.tg_chat_id, "text": f"🤖 **Weirdhost 代理版报告**\n\n{message}", "parse_mode": "Markdown"}, timeout=10)
+            requests.post(url, json={"chat_id": self.tg_chat_id, "text": f"🤖 **Weirdhost 报告**\n\n{message}", "parse_mode": "Markdown"}, timeout=10)
         except: pass
-
-    def solve_cf_with_2captcha(self, driver):
-        """若代理下依然触发验证，则调用 2Captcha"""
-        try:
-            self.log("🛡️ 代理环境下仍检测到盾，启动 2Captcha 辅助...")
-            sitekey = "0x4AAAAAACJH5atUUlnM2w2u"
-            res = requests.post("https://2captcha.com/in.php", data={
-                'key': self.api_key, 'method': 'turnstile', 'sitekey': sitekey,
-                'pageurl': driver.current_url, 'json': 1
-            }).json()
-            
-            if res.get("status") == 1:
-                task_id = res.get("request")
-                for _ in range(30):
-                    time.sleep(5)
-                    res_get = requests.get(f"https://2captcha.com/res.php?key={self.api_key}&action=get&id={task_id}&json=1").json()
-                    if res_get.get("status") == 1:
-                        token = res_get.get("request")
-                        driver.execute_script(f'document.querySelector("[name=cf-turnstile-response]").value = "{token}";')
-                        driver.execute_script('if(typeof cfCallback === "function") cfCallback();')
-                        return True
-        except: pass
-        return False
 
     def run(self):
-        self.log("🌐 启动 SeleniumBase (连接本地 10808 代理)...")
-        # proxy 参数将所有流量导向 Xray
+        self.log("🌐 启动 SeleniumBase (使用 10808 代理)...")
+        # 强制开启代理
         driver = Driver(uc=True, headless2=True, proxy="127.0.0.1:10808")
         
         try:
-            # 步骤 0: 验证代理是否生效
+            # 1. 验证代理连接
+            self.log("📡 验证代理连接性...")
             try:
-                driver.get("https://api.ipify.org")
-                self.log(f"📍 出口 IP 确认: {driver.get_text('body')}")
-            except:
-                self.log("⚠️ 无法获取出口 IP，代理可能未就绪。")
+                driver.get("https://www.google.com/generate_204", timeout=15)
+                self.log("✅ 代理网络连接正常")
+            except Exception as e:
+                self.log(f"❌ 代理连接失败: {e}")
+                # 即使失败也继续尝试，有时只是 google 访问不了
 
             for url in self.server_urls:
                 srv_id = url.split('/')[-1]
                 self.log(f"\n🚀 开始处理服务器: {srv_id}")
                 
-                # 注入鉴权 Cookie
-                driver.get("https://hub.weirdhost.xyz/")
-                driver.add_cookie({'name': self.cookie_name, 'value': self.current_cookie, 'domain': 'hub.weirdhost.xyz'})
+                # --- 修复 Cookie Domain 错误的关键步骤 ---
+                # A. 先打开目标域名的一个页面（甚至是 404 页也行）
+                self.log("🔗 正在进入域名上下文...")
+                driver.get("https://hub.weirdhost.xyz/login") 
+                time.sleep(5)
                 
-                # 访问目标页面
-                driver.get(url)
-                time.sleep(12) # 给予 UC 模式解析指纹的时间
-                
-                # 检查是否存在 CF 盾
-                if "Verify you are human" in driver.page_source:
-                    self.log("🛡️ 依然存在 CF 验证，执行破解...")
-                    self.solve_cf_with_2captcha(driver)
-                    time.sleep(10)
+                # B. 现在域名匹配了，注入 Cookie
+                self.log("🔑 注入 Session Cookie...")
+                try:
+                    driver.add_cookie({
+                        'name': self.cookie_name, 
+                        'value': self.current_cookie, 
+                        'domain': 'hub.weirdhost.xyz',
+                        'path': '/'
+                    })
+                except Exception as e:
+                    self.log(f"⚠️ Cookie 注入异常: {e}")
 
-                # 解析页面状态
+                # C. 再次跳转到具体的管理页面
+                driver.get(url)
+                time.sleep(12)
+                
+                # 2. 检查页面状态
                 source = driver.page_source
                 if "시간추가" in source or re.search(r'202\d-\d{2}-\d{2}', source):
-                    self.log("✅ 成功突入管理后台")
+                    self.log("✅ 已进入管理后台")
                     
-                    # 查找并点击续期按钮
-                    btn_found = False
-                    for selector in ['button.bkrtgq', 'button:contains("시간추가")']:
-                        if driver.is_element_visible(selector):
-                            self.log(f"🔘 发现按钮，点击续期...")
-                            driver.click(selector)
+                    # 查找续期按钮
+                    for sel in ['button.bkrtgq', 'button:contains("시간추가")']:
+                        if driver.is_element_visible(sel):
+                            self.log("🔘 执行点击续期...")
+                            driver.click(sel)
                             time.sleep(5)
-                            self.results.append(f"🖥 `Server:{srv_id}`\n🎉 代理辅助续期成功")
-                            btn_found = True
+                            self.results.append(f"🖥 `Server:{srv_id}`\n🎉 续期成功 (代理模式)")
                             break
-                    if not btn_found:
-                        self.results.append(f"🖥 `Server:{srv_id}`\n✅ 已进入后台，无需续期")
+                    else:
+                        self.results.append(f"🖥 `Server:{srv_id}`\n✅ 状态正常，无需操作")
                 else:
-                    self.log("❌ 突围失败")
-                    driver.save_screenshot(f"PROXY_FAIL_{srv_id}.png")
-                    self.results.append(f"🖥 `Server:{srv_id}`\n🚫 失败：代理下仍无法越过验证")
+                    self.log("🛡️ 未见后台内容，可能触发了 CF 验证...")
+                    driver.save_screenshot(f"FAIL_{srv_id}.png")
+                    self.results.append(f"🖥 `Server:{srv_id}`\n🚫 进入后台失败，查看截图")
 
         except Exception as e:
             self.log(f"💥 运行异常: {e}")
+            driver.save_screenshot("CRITICAL_ERROR.png")
         finally:
             driver.quit()
             if self.results:
