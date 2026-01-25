@@ -33,18 +33,39 @@ jobs:
         run: |
           # 下载 Xray 核心
           curl -L -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
-          unzip xray.zip
+          
+          # 使用 -o 参数强制覆盖，避免询问 replace README.md?
+          unzip -o xray.zip
+          
           chmod +x xray
           
-          # 从 GitHub Secret 读取 JSON 并写入配置文件
+          # 写入配置文件
           cat << 'EOF' > config.json
           ${{ secrets.XRAY_CONFIG_JSON }}
           EOF
           
-          # 后台运行 Xray，并将日志输出到文件以便调试
+          # 检查 config.json 是否为空（防止 Secret 配置错误）
+          if [ ! -s config.json ]; then
+            echo "❌ Error: XRAY_CONFIG_JSON secret is empty!"
+            exit 1
+          fi
+          
+          # 后台运行 Xray
           ./xray -c config.json > xray_log.txt 2>&1 &
+          
           echo "Xray 代理已在后台启动 (Port: 10808)"
-          sleep 8 # 预留时间等待节点连接
+          
+          # 增加等待时间，确保 Xray 建立连接
+          sleep 10
+          
+          # 简单检查进程是否存在
+          if ps aux | grep -v grep | grep -q "./xray"; then
+            echo "✅ Xray 进程运行中"
+          else
+            echo "❌ Xray 启动失败，请检查 xray_log.txt"
+            cat xray_log.txt
+            exit 1
+          fi
 
       - name: Run Renewal Script
         env:
