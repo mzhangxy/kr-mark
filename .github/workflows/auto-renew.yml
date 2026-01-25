@@ -1,62 +1,53 @@
-name: Weirdhost Auto Renew
+name: Weirdhost Auto Renewal
 
 on:
   schedule:
-    - cron: '0 17 */2 * *'  # 每2天运行
-  workflow_dispatch:     # 允许手动触发
+    - cron: '0 18 * * *' # 每天凌晨 2 点(北京时间)运行
+  workflow_dispatch: # 支持手动运行
+
+permissions:
+  contents: write # 必须赋予写权限以保存 cookie 文件
 
 jobs:
-  auto-renew:
+  renew:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    
-    permissions:
-      contents: write
-    
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-        
-    - name: Install dependencies
-      run: |
-        # 🟢 增加安装 requests 库，用于连接 2captcha API
-        pip install playwright requests
-        playwright install chromium
-          
-    - name: Set up WARP
-      uses: fscarmen/warp-on-actions@v1.4
-      with:
-        stack: dual
-        mode: wireguard
-      
-    - name: Run Script
-      env:
-        TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
-        REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
-        WEIRDHOST_SERVER_URLS: ${{ secrets.WEIRDHOST_SERVER_URLS }}
-        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      run: python main.py
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Upload Debug Screenshots
-      if: always() # 无论成功失败都执行
-      uses: actions/upload-artifact@v4
-      with:
-        name: debug-screenshots
-        path: ./*.png
-        retention-days: 1
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Commit and Push if Cookie Changed
-      run: |
-        git config --local user.email "actions@github.com"
-        git config --local user.name "GitHub Action"
-        if [ -f session_cookie.txt ]; then
-          git add session_cookie.txt
-          git commit -m "chore: update session cookie [skip ci]" || echo "No changes to commit"
-          git push
-        fi
+      - name: Install dependencies
+        run: |
+          pip install playwright requests
+          playwright install chromium --with-deps
+
+      - name: Run main script
+        env:
+          TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
+          REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
+          WEIRDHOST_SERVER_URLS: ${{ secrets.WEIRDHOST_SERVER_URLS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py
+
+      - name: Commit and Push Cookie
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Action"
+          if [ -f session_cookie.txt ]; then
+            git add session_cookie.txt
+            git commit -m "chore: update session cookie [skip ci]" || echo "No changes to commit"
+            git push
+          fi
+
+      - name: Upload Debug Screenshots
+        if: always() # 无论成功失败都会上传图片
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: ./*.png # 匹配根目录所有截图
+          retention-days: 1
