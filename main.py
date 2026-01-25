@@ -38,26 +38,38 @@ class WeirdhostUltimate:
         except: pass
 
     def is_cf_shield_present(self, page):
-        """检查是否存在 CF 挑战"""
+        """精准检测 CF 盾牌是否存在"""
         return page.locator("iframe[src*='challenges']").count() > 0 or "Verify you are human" in page.content()
 
     def handle_cf_shield(self, page, srv_id):
-        """智能破盾：先等待，后 API"""
+        """分级处理盾牌"""
         if not self.is_cf_shield_present(page):
             return True
 
-        self.log("🛡️ 检测到 Cloudflare 挑战，尝试等待自动过盾...")
-        time.sleep(7) # 按照建议等待 6-7 秒
+        self.log("🛡️ 检测到 Cloudflare，等待 7s 自动过盾...")
+        time.sleep(7)
         
         if not self.is_cf_shield_present(page):
             self.log("✅ 自动过盾成功。")
             return True
 
-        self.log("🛡️ 自动过盾失败，启动 2captcha API 破解...")
-        return self.solve_turnstile_api(page)
+        self.log("🛡️ 自动过盾失败，请求 API 协助...")
+        if self.solve_turnstile_api(page):
+            self.log("⏳ API 指令已下达，等待 10s 校验...")
+            time.sleep(10)
+            
+            # 如果还在盾牌页，尝试刷新以应用通过的验证
+            if self.is_cf_shield_present(page):
+                self.log("🔄 页面未自动跳转，尝试刷新...")
+                page.reload(wait_until="domcontentloaded")
+                time.sleep(5)
+            
+            return not self.is_cf_shield_present(page)
+        return False
 
     def solve_turnstile_api(self, page):
         try:
+            self.safe_screenshot(page, "BEFORE_API_SOLVE")
             in_res = requests.post("https://2captcha.com/in.php", data={
                 'key': self.api_key, 'method': 'turnstile', 'sitekey': self.sitekey,
                 'pageurl': page.url, 'json': 1
@@ -70,12 +82,25 @@ class WeirdhostUltimate:
                 res = requests.get(f"https://2captcha.com/res.php?key={self.api_key}&action=get&id={task_id}&json=1").json()
                 if res.get("status") == 1:
                     token = res.get("request")
+                    # 注入 Token
                     page.evaluate(f'document.querySelector("[name=cf-turnstile-response]").value = "{token}";')
-                    page.evaluate('if (typeof cfCallback === "function") { cfCallback(); }')
-                    page.evaluate('if (typeof turnstileCallback === "function") { turnstileCallback(); }')
-                    self.log("✅ API 破解指令已提交。")
+                    # 强力触发所有可能的回调
+                    page.evaluate('''() => {
+                        const tryCallbacks = (obj) => {
+                            for (let key in obj) {
+                                if (key.includes('cf') || key.includes('turnstile')) {
+                                    if (typeof obj[key] === 'function') obj[key]();
+                                }
+                            }
+                        };
+                        tryCallbacks(window);
+                        if (typeof cfCallback === 'function') cfCallback();
+                        if (typeof turnstileCallback === 'function') turnstileCallback();
+                    }''')
+                    self.log("✅ Token 已注入并尝试触发回调。")
                     return True
-        except: pass
+        except Exception as e:
+            self.log(f"💥 API 破解异常: {e}")
         return False
 
     def run(self):
@@ -96,25 +121,21 @@ class WeirdhostUltimate:
             for url in self.server_urls:
                 srv_id = url.split('/')[-1]
                 try:
-                    self.log(f"\n🚀 访问: {url}")
+                    self.log(f"\n🚀 目标: {url}")
                     page.goto(url, wait_until="domcontentloaded", timeout=60000)
                     
-                    # 第一次破盾（进门）
+                    # 第一轮破盾
                     self.handle_cf_shield(page, srv_id)
-                    page.wait_for_timeout(5000)
                     
                     self.log(f"🔗 落地 URL: {page.url}")
                     if "login" in page.url.lower():
                         self.results.append(f"🖥 `Server:{srv_id}`\n🚫 *Cookie 已失效*")
                         continue
 
-                    # 第二次确认（防止跳转后复现盾）
-                    if self.is_cf_shield_present(page):
-                        self.log("🛡️ 详情页再次出现盾，二次处理...")
-                        self.handle_cf_shield(page, srv_id)
-                        page.wait_for_timeout(5000)
+                    # 第二轮破盾（针对详情页刷新出的挑战）
+                    self.handle_cf_shield(page, srv_id)
 
-                    # 1. 识别时间
+                    # 1. 解析时间
                     try:
                         target = page.get_by_text(re.compile(r"202\d-\d{2}-\d{2}")).first
                         target.wait_for(state="visible", timeout=8000)
@@ -128,41 +149,39 @@ class WeirdhostUltimate:
                                 self.results.append(f"🖥 `Server:{srv_id}`\n📅 到期:{time_str}\n✅ 剩余{days_left}天")
                                 continue
                     except:
-                        self.log("⚠️ 时间识别受阻，尝试直接找按钮...")
+                        self.log("⚠️ 无法识别时间元素，准备寻找按钮...")
 
-                    # 2. 寻找续期按钮
+                    # 2. 寻找按钮
                     renew_btn = page.locator("button:has-text('시간추가')").first
                     if not renew_btn.is_visible():
                         renew_btn = page.locator("button.bkrtgq").first
 
                     if renew_btn.is_visible():
-                        self.log("🔘 点击续期按钮...")
+                        self.log("🔘 点击续期...")
                         renew_btn.click()
-                        page.wait_for_timeout(5000)
-                        # 点击后的第三次确认（按钮挑战）
-                        if self.is_cf_shield_present(page):
-                            self.handle_cf_shield(page, srv_id)
-                            page.wait_for_timeout(8000)
-                        self.results.append(f"🖥 `Server:{srv_id}`\n🎉 续期指令已发出")
+                        time.sleep(5)
+                        # 第三轮破盾（点击按钮后）
+                        self.handle_cf_shield(page, srv_id)
+                        self.results.append(f"🖥 `Server:{srv_id}`\n🎉 续期指令执行完毕")
                     else:
-                        self.log("⏭️ 未发现按钮")
-                        self.safe_screenshot(page, f"FINAL_NOT_FOUND_{srv_id}")
-                        self.results.append(f"🖥 `Server:{srv_id}`\n❓ 未发现续期按钮")
+                        self.log("⏭️ 最终未发现按钮")
+                        self.safe_screenshot(page, f"FINAL_FAIL_{srv_id}")
+                        self.results.append(f"🖥 `Server:{srv_id}`\n❓ 失败：页面未正确加载按钮")
 
                 except Exception as e:
                     self.log(f"💥 异常: {e}")
                     self.results.append(f"🖥 `Server:{srv_id}`\n💥 异常")
 
-            # Cookie 更新逻辑
+            # 3. Cookie 同步
             for ck in context.cookies():
                 if ck['name'] == self.cookie_name and ck['value'] != self.current_cookie:
                     with open(os.path.join(self.base_path, self.cookie_file), "w") as f:
                         f.write(ck['value'])
-                    self.results.append("🔄 *Cookie 已自动同步*")
+                    self.results.append("🔄 *Cookie 已更新*")
 
             browser.close()
             if self.results:
-                msg = "🤖 *Weirdhost 续期报告*\n\n" + "\n\n".join(self.results)
+                msg = "🤖 *Weirdhost 续期调试报告*\n\n" + "\n\n".join(self.results)
                 requests.post(f"https://api.telegram.org/bot{self.tg_token}/sendMessage", 
                              json={"chat_id": self.tg_chat_id, "text": msg, "parse_mode": "Markdown"})
 
