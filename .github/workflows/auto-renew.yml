@@ -1,9 +1,9 @@
-name: Weirdhost Auto Renewal
+name: Weirdhost Auto Renewal with Proxy
 
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch:
   schedule:
-    - cron: '0 10 * * *' # 每天北京时间 18:00 运行 (UTC 10:00)
+    - cron: '0 10 * * *' # 每天北京时间 18:00 运行
 
 jobs:
   renew:
@@ -17,42 +17,49 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y google-chrome-stable
+          sudo apt-get install -y google-chrome-stable unzip
 
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install seleniumbase requests
-          # 执行 seleniumbase 的驱动安装命令，这是 uc 模式运行的关键
           sbase install chromedriver
+
+      - name: Setup Xray Proxy
+        run: |
+          # 下载 Xray 核心
+          curl -L -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+          unzip xray.zip
+          chmod +x xray
+          
+          # 从 GitHub Secret 读取 JSON 并写入配置文件
+          cat << 'EOF' > config.json
+          ${{ secrets.XRAY_CONFIG_JSON }}
+          EOF
+          
+          # 后台运行 Xray，并将日志输出到文件以便调试
+          ./xray -c config.json > xray_log.txt 2>&1 &
+          echo "Xray 代理已在后台启动 (Port: 10808)"
+          sleep 8 # 预留时间等待节点连接
 
       - name: Run Renewal Script
         env:
-          # 基础配置
           TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
           REMEMBER_WEB_COOKIE: ${{ secrets.REMEMBER_WEB_COOKIE }}
           WEIRDHOST_SERVER_URLS: ${{ secrets.WEIRDHOST_SERVER_URLS }}
-          
-          # Telegram 通知配置
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          
-          # 如果你的脚本需要 Searcade 的账号密码也可以配置在这里
-          USER_EMAIL: ${{ secrets.USER_EMAIL }}
-          USER_PASSWORD: ${{ secrets.USER_PASSWORD }}
         run: python main.py
 
-      - name: Upload Debug Screenshots
-        if: always() # 无论成功还是失败都上传截图用于调试
+      - name: Upload Debug Data
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: debug-screenshots
+          name: debug-info
           path: |
             *.png
-            session_cookie.txt
-          retention-days: 3
+            xray_log.txt
