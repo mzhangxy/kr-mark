@@ -1,0 +1,122 @@
+name: Weirdhost Auto Renewal with Proxy (Playwright)
+
+on:
+  workflow_dispatch:  # 手动触发
+  schedule:
+    - cron: '0 10 * * *'  # 每天 UTC 10:00 → 北京时间 18:00
+
+jobs:
+  renew:
+    runs-on: ubuntu-24.04  # 明确指定 Ubuntu 24.04，避免版本迁移问题
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ca-certificates \
+            fonts-liberation \
+            libasound2t64 \
+            libatk-bridge2.0-0 \
+            libatk1.0-0 \
+            libatspi2.0-0 \
+            libcairo2 \
+            libcups2 \
+            libdbus-1-3 \
+            libdrm2 \
+            libexpat1 \
+            libgbm1 \
+            libglib2.0-0 \
+            libgtk-3-0 \
+            libnspr4 \
+            libnss3 \
+            libpango-1.0-0 \
+            libx11-6 \
+            libxcb1 \
+            libxcomposite1 \
+            libxcursor1 \
+            libxdamage1 \
+            libxext6 \
+            libxfixes3 \
+            libxi6 \
+            libxrandr2 \
+            libxrender1 \
+            libxtst6 \
+            unzip \
+            wget \
+            xvfb
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright requests
+          # 安装 Playwright 浏览器（chromium）
+          playwright install chromium --with-deps
+
+      - name: Setup Xray Proxy
+        run: |
+          # 下载最新 Xray 核心（linux-64）
+          curl -L -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+          
+          # 强制覆盖解压
+          unzip -o xray.zip
+          
+          chmod +x xray
+          
+          # 从 Secret 写入配置文件
+          cat << 'EOF' > config.json
+          ${{ secrets.XRAY_CONFIG_JSON }}
+          EOF
+          
+          # 检查 config 是否为空
+          if [ ! -s config.json ]; then
+            echo "❌ Error: XRAY_CONFIG_JSON secret is empty or invalid!"
+            exit 1
+          fi
+          
+          # 后台启动 Xray
+          ./xray -c config.json > xray_log.txt 2>&1 &
+          
+          echo "Xray 代理已在后台启动 (SOCKS5 Port: 10808)"
+          
+          # 等待启动并建立连接
+          sleep 12
+          
+          # 检查进程是否存活
+          if ps aux | grep -v grep | grep -q "./xray"; then
+            echo "✅ Xray 进程运行中"
+            echo "最近日志:"
+            tail -n 30 xray_log.txt
+          else
+            echo "❌ Xray 启动失败，请检查日志："
+            cat xray_log.txt
+            exit 1
+          fi
+
+      - name: Run Renewal Script
+        env:
+          TWOCAPTCHA_API_KEY:     ${{ secrets.TWOCAPTCHA_API_KEY }}
+          REMEMBER_WEB_COOKIE:    ${{ secrets.REMEMBER_WEB_COOKIE }}
+          WEIRDHOST_SERVER_URLS:  ${{ secrets.WEIRDHOST_SERVER_URLS }}
+          TELEGRAM_BOT_TOKEN:     ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:       ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py
+
+      - name: Upload Debug Artifacts (Always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-logs-and-screenshots
+          path: |
+            *.png
+            *.html
+            xray_log.txt
+          retention-days: 7
