@@ -15,8 +15,6 @@ class WeirdhostUltimate:
         self.tg_chat_id = os.getenv('TELEGRAM_CHAT_ID')
         # 验证码 Sitekey
         self.sitekey = "0x4AAAAAACJH5atUUlnM2w2u"
-        # 记录运行结果
-        self.results = []
 
     def send_tg_notification(self, message):
         """发送 Telegram 通知 (带重试机制)"""
