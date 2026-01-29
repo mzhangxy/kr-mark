@@ -49,50 +49,83 @@ class WeirdhostUltimate:
         except Exception as e:
             print(f"⚠️ 时间解析提示: {e}")
         return None, None
-
-    def solve_turnstile(self, page):
-        print(f"🛡️ 正在请求 2captcha 破解...")
+    
+    def solve_turnstile(self, page, srv_id):
+        print(f"🛡️ 正在请求 2captcha 破解... (服务器: {srv_id})")
         in_res = requests.post("https://2captcha.com/in.php", data={
-            'key': self.api_key, 'method': 'turnstile', 'sitekey': self.sitekey,
-            'pageurl': page.url, 'json': 1
+            'key': self.api_key, 'method': 'turnstile',
+            'sitekey': self.sitekey, 'pageurl': page.url, 'json': 1
         }).json()
 
-        if in_res.get("status") != 1: return False
+        print(f"2captcha 提交响应: {in_res}")
+        if in_res.get("status") != 1:
+            print("提交任务失败")
+            return False
 
         task_id = in_res.get("request")
-        for _ in range(30):
+        print(f"任务ID: {task_id}")
+
+        for poll in range(30):
             time.sleep(5)
             res = requests.get(f"https://2captcha.com/res.php?key={self.api_key}&action=get&id={task_id}&json=1").json()
+            print(f"轮询 {poll+1}/30: {res}")
             if res.get("status") == 1:
                 token = res.get("request")
-                # 尝试切换到 Turnstile iframe
-                try:
-                    turnstile_frame = page.frame_locator('iframe[src*="challenges.cloudflare.com"]')
-                    print("切换到 Turnstile iframe...")
-                    turnstile_frame.locator("input[type='checkbox']").click(timeout=5000)
-                    print("模拟点击 checkbox")
-                except Exception as e:
-                    print(f"iframe 切换或点击失败: {e}")
-                    # fallback 到主页面注入
-                    page.evaluate(f'document.querySelector("[name=cf-turnstile-response]").value = "{token}";')
-                    page.evaluate('if (typeof cfCallback === "function") { cfCallback(); }')
+                print(f"成功获取 token (长度 {len(token)}): {token[:30]}...")
 
-                # 额外触发事件
-                page.evaluate('''
-                    var elem = document.querySelector("[name='cf-turnstile-response']");
-                    if (elem) {
-                        elem.dispatchEvent(new Event('change', { bubbles: true }));
-                        elem.dispatchEvent(new Event('input', { bubbles: true }));
-                    }
-                ''')
-                # 等待验证响应
+                # 关键：切换到 Turnstile iframe 并模拟点击 checkbox
                 try:
-                    page.wait_for_selector("[name='cf-turnstile-response']", state="detached", timeout=10000)
-                    print("Turnstile 元素已消失，验证可能成功")
-                except:
-                    print("Turnstile 元素未消失，验证可能失败")
-                return True
-            if res.get("request") != "CAPCHA_NOT_READY": break
+                    # 更宽松匹配 iframe（turnstile 或 cloudflare 相关）
+                    iframe_locator = page.frame_locator('iframe[src*="turnstile"], iframe[src*="cloudflare"], iframe[src*="challenges"]')
+                    print("尝试切换到 Turnstile iframe...")
+
+                    # 等待 iframe 加载 checkbox
+                    checkbox = iframe_locator.locator('input[type="checkbox"], div.cf-turnstile-checkbox, label[for*="cf-turnstile"]')
+                    checkbox.wait_for(state="visible", timeout=15000)
+                    print("找到 checkbox 元素")
+
+                    # 模拟点击 checkbox（点击左边区域也行，locator 会自动处理）
+                    checkbox.click(position={"x": 10, "y": 10})  # 点击 checkbox 左上角 10px 位置，模拟你本地行为
+                    print("已模拟点击 checkbox")
+
+                    # 等待验证成功（看 checkbox 是否变绿或弹窗消失）
+                    page.wait_for_timeout(8000)  # 给 Cloudflare 时间处理
+                    checkbox_state = checkbox.evaluate('el => el.checked || el.getAttribute("aria-checked") === "true" || false')
+                    print(f"checkbox 状态（是否选中/验证通过）: {checkbox_state}")
+
+                    # 检查弹窗是否关闭（如果有 modal）
+                    modal = page.locator('div[role="dialog"], div.cf-modal')
+                    if modal.count() == 0:
+                        print("弹窗已关闭 → 验证很可能成功")
+                    else:
+                        print("弹窗仍存在 → 验证可能失败")
+
+                    # 最终检查 hidden input 是否有 token
+                    hidden_token = page.evaluate('document.querySelector("[name=\'cf-turnstile-response\']")?.value || "未找到"')
+                    print(f"最终 hidden token: {hidden_token[:30]}...")
+
+                    # 保存最终状态截图
+                    page.screenshot(path=f"after_checkbox_click_{srv_id}.png")
+                    print(f"保存 checkbox 点击后截图: after_checkbox_click_{srv_id}.png")
+
+                    return True
+
+                except Exception as e:
+                    print(f"iframe / checkbox 操作失败: {e}")
+                    # fallback: 只注入 token + 触发事件（旧方式）
+                    page.evaluate(f"""
+                        var elem = document.querySelector("[name='cf-turnstile-response']");
+                        if (elem) elem.value = "{token}";
+                        if (typeof cfCallback === 'function') cfCallback();
+                    """)
+                    page.wait_for_timeout(5000)
+                    return True  # 假设 fallback 可能有效
+
+            if res.get("request") != "CAPCHA_NOT_READY":
+                print(f"2captcha 异常: {res.get('request')}")
+                break
+
+        print("破解超时或失败")
         return False
 
     def run(self):
