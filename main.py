@@ -78,30 +78,32 @@ class WeirdhostUltimate:
         return False
 
     def run(self):
-        with sync_playwright() as p:
+        results = []
+        playwright = None
+        browser = None
+        context = None
+        page = None
+
+        try:
             print("🌐 启动浏览器...")
-            # ====================== 关键修改：在这里设置代理 ======================
-            # socks5 代理格式： "socks5://127.0.0.1:10808"
-            # 如果是 http 代理就写 "http://127.0.0.1:10808"
             proxy_settings = {
                 "server": "socks5://127.0.0.1:10808",
             }
-            browser = p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
+
+            playwright = sync_playwright().start()  # 手动启动 playwright
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=['--disable-blink-features=AutomationControlled']
+            )
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                proxy=proxy_settings,   # ← 这里设置代理
+                proxy=proxy_settings,
                 viewport={'width': 1280, 'height': 800}
             )
-            
-            #browser = p.chromium.launch(headless=True)
-            #context = browser.new_context(
-            #    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            #    viewport={'width': 1280, 'height': 800}
-            #)
-            
+
             # 自动识别旧 Cookie 的完整 Name（如果环境变量只提供了 Value）
             cookie_name = 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d'
-            
+
             context.add_cookies([{
                 'name': cookie_name,
                 'value': self.cookie_value,
@@ -113,43 +115,39 @@ class WeirdhostUltimate:
 
             page = context.new_page()
 
+            # 验证代理出口 IP
             print("📡 验证代理出口 IP...")
-        try:
             page.goto("https://api.ipify.org", timeout=30000)
             ip_text = page.inner_text("body").strip()
             print(f"当前出口 IP: {ip_text}")
 
-            # 判断是否符合期望的代理 IP 段
+            # 判断是否符合期望的代理 IP 段（根据你之前的日志）
             if "211.221.75" not in ip_text:
                 raise Exception(f"代理未生效！当前 IP: {ip_text} （期望包含 211.221.75）")
             print("✅ 代理验证通过")
-        except Exception as e:
-            print(f"❌ 代理验证失败: {e}")
-            browser.close()
-            raise  # 直接抛出异常，让 workflow 失败，便于你发现问题
-            
+
             # --- 业务逻辑开始 ---
             for url in self.server_urls:
                 srv_id = url.split('/')[-1]
                 try:
                     print(f"\n🚀 目标服务器: {url}")
                     page.goto(url, wait_until="networkidle", timeout=60000)
-                    page.wait_for_timeout(5000) 
+                    page.wait_for_timeout(5000)
 
                     days_left, expiry_date = self.get_remaining_days(page)
                     time_str = expiry_date.strftime('%Y-%m-%d') if expiry_date else "未知"
-                    
+
                     if days_left is not None and days_left > 6:
                         self.results.append(f"🖥 `Server:{srv_id}`\n📅 到期:{time_str}\n✅ 剩余{days_left}天，无需操作")
                         continue
-                    
+
                     renew_btn = page.locator("button:has-text('시간추가')").first
                     if not renew_btn.is_visible():
                         renew_btn = page.locator("button.bkrtgq").first
 
                     if renew_btn.is_visible():
                         renew_btn.click()
-                        page.wait_for_timeout(3000) 
+                        page.wait_for_timeout(3000)
                         if page.locator("[name='cf-turnstile-response']").count() > 0:
                             if self.solve_turnstile(page):
                                 page.wait_for_timeout(7000)
@@ -173,15 +171,49 @@ class WeirdhostUltimate:
                     if ck['value'] != self.cookie_value:
                         new_cookie_val = ck['value']
                         break
-            
+
             if new_cookie_val:
                 self.results.append(f"🔄 *检测到 Cookie 更新*\n新的凭证已产生，请更新 Secret：\n`{new_cookie_val}`")
-            
-            browser.close()
-            
-            if self.results:
-                report = "🤖 *Weirdhost 运行报告*\n\n" + "\n\n".join(self.results)
-                self.send_tg_notification(report)
+
+        except Exception as e:
+            print(f"❌ 运行异常: {e}")
+            if page:
+                try:
+                    page.screenshot(path="error_screenshot.png")
+                    print("已保存错误截图: error_screenshot.png")
+                except:
+                    pass
+            raise  # 让 workflow 标记失败
+
+        finally:
+            # 安全清理资源
+            print("🧹 清理浏览器资源...")
+            if page:
+                try:
+                    page.close()
+                except:
+                    pass
+            if context:
+                try:
+                    context.close()
+                except:
+                    pass
+            if browser:
+                try:
+                    browser.close()
+                except:
+                    pass
+            if playwright:
+                try:
+                    playwright.stop()
+                except:
+                    pass
+
+        # --- 发送报告 ---
+        if self.results:
+            report = "🤖 *Weirdhost 运行报告*\n\n" + "\n\n".join(self.results)
+            self.send_tg_notification(report)
+ 
 
 if __name__ == "__main__":
     bot = WeirdhostUltimate()
