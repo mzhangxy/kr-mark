@@ -80,11 +80,24 @@ class WeirdhostUltimate:
     def run(self):
         with sync_playwright() as p:
             print("🌐 启动浏览器...")
-            browser = p.chromium.launch(headless=True)
+            # ====================== 关键修改：在这里设置代理 ======================
+            # socks5 代理格式： "socks5://127.0.0.1:10808"
+            # 如果是 http 代理就写 "http://127.0.0.1:10808"
+            proxy_settings = {
+                "server": "socks5://127.0.0.1:10808",
+            }
+            browser = p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                proxy=proxy_settings,   # ← 这里设置代理
                 viewport={'width': 1280, 'height': 800}
             )
+            
+            #browser = p.chromium.launch(headless=True)
+            #context = browser.new_context(
+            #    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            #    viewport={'width': 1280, 'height': 800}
+            #)
             
             # 自动识别旧 Cookie 的完整 Name（如果环境变量只提供了 Value）
             cookie_name = 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d'
@@ -99,6 +112,21 @@ class WeirdhostUltimate:
             }])
 
             page = context.new_page()
+
+            print("📡 验证代理出口 IP...")
+        try:
+            page.goto("https://api.ipify.org", timeout=30000)
+            ip_text = page.inner_text("body").strip()
+            print(f"当前出口 IP: {ip_text}")
+
+            # 判断是否符合期望的代理 IP 段
+            if "211.221.75" not in ip_text:
+                raise Exception(f"代理未生效！当前 IP: {ip_text} （期望包含 211.221.75）")
+            print("✅ 代理验证通过")
+        except Exception as e:
+            print(f"❌ 代理验证失败: {e}")
+            browser.close()
+            raise  # 直接抛出异常，让 workflow 失败，便于你发现问题
             
             # --- 业务逻辑开始 ---
             for url in self.server_urls:
