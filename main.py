@@ -5,12 +5,11 @@ import requests
 import zipfile
 import io
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from seleniumbase import SB
 
 class WeirdhostPureSB:
     def __init__(self):
-        # 移除了 2Captcha API Key，因为不再需要
         self.cookie_name = 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d'
         self.cookie_value = os.getenv('REMEMBER_WEB_COOKIE', '')
         self.server_urls = [url.strip() for url in os.getenv('WEIRDHOST_SERVER_URLS', '').split(',') if url.strip()]
@@ -18,16 +17,30 @@ class WeirdhostPureSB:
         self.tg_chat_id = os.getenv('TG_CHAT_ID') or os.getenv('TELEGRAM_CHAT_ID')
         self.results = []
         
-        # 插件下载配置
+        # 扩展配置
         self.ext_url = "https://github.com/NopeCHALLC/nopecha-extension/releases/download/0.5.5/chromium_automation.zip"
-        self.ext_dir_name = "nopecha_extension"
+        self.ext_dir = "nopecha_extension"
 
     def log(self, msg):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
+    def download_and_extract_extension(self):
+        if os.path.exists(self.ext_dir):
+            shutil.rmtree(self.ext_dir)
+        
+        self.log(f"⬇️ 正在下载 NopeCHA 扩展...")
+        try:
+            r = requests.get(self.ext_url, timeout=30)
+            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+                z.extractall(self.ext_dir)
+            self.log("✅ 扩展下载并解压成功")
+            return os.path.abspath(self.ext_dir)
+        except Exception as e:
+            self.log(f"❌ 扩展下载失败: {e}")
+            return None
+
     def send_tg_notification(self, message):
         if not self.tg_token or not self.tg_chat_id:
-            self.log("⚠️ TG 未配置，跳过通知")
             return
         try:
             requests.post(
@@ -35,38 +48,8 @@ class WeirdhostPureSB:
                 json={"chat_id": self.tg_chat_id, "text": message, "parse_mode": "HTML"},
                 timeout=10
             )
-            self.log("📤 TG 通知已发送")
         except Exception as e:
             self.log(f"❌ TG 发送失败: {e}")
-
-    def setup_extension(self):
-        """下载并解压 NopeCHA 扩展"""
-        cwd = os.getcwd()
-        ext_path = os.path.join(cwd, self.ext_dir_name)
-
-        # 如果目录存在且有 manifest.json，假设已下载好
-        if os.path.exists(ext_path) and os.path.exists(os.path.join(ext_path, "manifest.json")):
-            self.log(f"✅ 检测到扩展目录: {ext_path}")
-            return ext_path
-        
-        self.log("⬇️ 正在下载 NopeCHA 扩展...")
-        try:
-            # 清理旧目录（如果有）
-            if os.path.exists(ext_path):
-                shutil.rmtree(ext_path)
-            
-            resp = requests.get(self.ext_url, timeout=30)
-            if resp.status_code == 200:
-                with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
-                    z.extractall(ext_path)
-                self.log(f"✅ 扩展下载并解压成功: {ext_path}")
-                return ext_path
-            else:
-                self.log(f"❌ 下载失败，状态码: {resp.status_code}")
-                return None
-        except Exception as e:
-            self.log(f"❌ 扩展准备失败: {e}")
-            return None
 
     def get_remaining_days(self, sb):
         try:
@@ -76,186 +59,148 @@ class WeirdhostPureSB:
                 expiry_str = match.group(1)
                 expiry = datetime.strptime(expiry_str, '%Y-%m-%d %H:%M:%S')
                 days = (expiry - datetime.now()).days
-                self.log(f"📅 从页面解析到期: {expiry_str}，剩余 {days} 天")
                 return days, expiry
-            self.log("⚠️ 页面上未找到日期格式文本")
             return None, None
-        except Exception as e:
-            self.log(f"⚠️ 时间解析异常: {str(e)[:80]}")
+        except:
             return None, None
 
     def run(self):
-        # 1. 准备扩展路径
-        ext_path = self.setup_extension()
+        ext_path = self.download_and_extract_extension()
         if not ext_path:
-            self.log("❌ 无法加载扩展，终止运行")
             return
 
         self.log("🌐 启动 SeleniumBase UC 模式 (带扩展)...")
-        
-        # 2. 在 SB 初始化中加入 extension_dir
+        # 增加 incognito=True 有时能避开部分缓存检测，但在扩展模式下慎用（有些扩展不支持）
         with SB(uc=True, xvfb=True, headless2=True, proxy="127.0.0.1:10808", extension_dir=ext_path) as sb:
+            
             # 验证代理
-            self.log("📡 验证出口 IP...")
             try:
                 sb.get("https://api.ipify.org")
-                time.sleep(5)
-                ip = sb.get_text("body").strip()
-                self.log(f"✅ 代理 IP: {ip}")
+                time.sleep(2)
+                self.log(f"📡 代理 IP: {sb.get_text('body').strip()}")
             except:
-                self.log("⚠️ 无法获取 IP，继续尝试...")
-
-            # 等待一小会儿让扩展初始化
-            time.sleep(3)
+                pass
 
             for url in self.server_urls:
                 srv_id = url.split('/')[-1]
                 msg_prefix = f"🖥 <b>服务器: {srv_id}</b>\n"
+                
+                # 登录流程
                 self.log(f"\n🚀 处理服务器: {srv_id}")
-
-                # 进入域名上下文
-                self.log("🔗 进入域名中...")
-                sb.uc_open("https://hub.weirdhost.xyz/login")  
-                time.sleep(8)
-                sb.wait_for_ready_state_complete(timeout=15)
-
-                current_url_lower = sb.get_current_url().lower()
-                if "weirdhost.xyz" not in current_url_lower:
-                    self.log(f"⚠️ 域名不匹配: {sb.get_current_url()}")
-                    sb.save_screenshot(f"proxy_err_{srv_id}.png")
-                    self.results.append(f"{msg_prefix}状态: ❌ 代理/域名失败")
-                    continue
-
-                # 注入 Cookie
-                self.log("🔑 注入 Cookie...")
-                try:
-                    sb.add_cookie({
-                        'name': self.cookie_name,
-                        'value': self.cookie_value,
-                        'domain': 'hub.weirdhost.xyz',
-                        'path': '/',
-                        'httpOnly': True,
-                        'secure': True
-                    })
-                    sb.refresh()
-                    self.log("✅ Cookie 注入完成")
-                except Exception as e:
-                    self.log(f"❌ Cookie 注入失败: {e}")
-                    self.results.append(f"{msg_prefix}状态: ❌ Cookie 注入失败")
-                    continue
-
-                # 访问目标服务器页
+                sb.uc_open("https://hub.weirdhost.xyz/login")
+                time.sleep(5)
+                sb.add_cookie({'name': self.cookie_name, 'value': self.cookie_value, 'domain': 'hub.weirdhost.xyz'})
+                sb.refresh()
+                
                 sb.get(url)
-                time.sleep(10)
-                sb.wait_for_ready_state_complete(timeout=15)
-
-                # 检查是否成功进入后台
-                source = sb.get_page_source()
-                if "시간추가" not in source and not re.search(r'202\d-\d{2}-\d{2}', source):
-                    self.log("🛡️ 状态异常")
-                    sb.save_screenshot(f"status_err_{srv_id}.png")
-                    self.results.append(f"{msg_prefix}状态: ❌ 进入后台失败")
+                time.sleep(8)
+                
+                # 初始状态检查
+                days_left, old_expiry = self.get_remaining_days(sb)
+                if old_expiry:
+                    self.log(f"📅 当前到期: {old_expiry}")
+                
+                if days_left is not None and days_left > 4:
+                    self.results.append(f"{msg_prefix}状态: ✅ 无需续期 (剩余 {days_left} 天)")
                     continue
 
-                self.log("✅ 成功进入后台")
-
-                # 解析剩余天数
-                days_left, expiry = self.get_remaining_days(sb)
-                expiry_info = f"📅 到期: {expiry.strftime('%Y-%m-%d %H:%M:%S') if expiry else '未知'}\n"
-
-                if days_left is not None and days_left > 9:
-                    self.log(f"⏳ 剩余 {days_left} 天 (>9)，跳过续期")
-                    status = "✅ <b>无需续期</b> (剩余 > 9天)"
-                    self.results.append(f"{msg_prefix}{expiry_info}状态: {status}")
-                    continue
-
-                # 尝试续期
-                self.log("🔄 尝试续期...")
-                renew_sel = 'button.bkrtgq'
+                # 执行续期
                 try:
-                    sb.wait_for_element_visible(renew_sel, timeout=12)
-                    sb.click(renew_sel)
-                    time.sleep(5) # 给一点时间让弹窗或挑战出现
+                    renew_sel = 'button.bkrtgq'
+                    if not sb.is_element_visible(renew_sel):
+                        self.log("❌ 未找到续期按钮")
+                        self.results.append(f"{msg_prefix}状态: ❌ 未找到按钮")
+                        continue
 
-                    # 处理 Turnstile
+                    sb.click(renew_sel)
+                    self.log("🔄 已点击续期按钮，等待处理...")
+                    time.sleep(5)
+
+                    # ----------------------
+                    # 新的过盾逻辑 (混合模式)
+                    # ----------------------
                     turnstile_sel = '[name="cf-turnstile-response"]'
-                    
-                    # 检查是否存在 Turnstile 元素
                     if sb.is_element_present(turnstile_sel):
-                        self.log("🕒 检测到 Turnstile，等待 NopeCHA 扩展自动处理...")
+                        self.log("🛡️ 检测到 Turnstile，开始混合破解...")
                         
-                        # 这里我们不需要调用 API，而是等待扩展完成工作
-                        # 扩展成功后，通常 token 输入框会有值，或者表单会自动提交
-                        
-                        max_wait = 40
                         solved = False
-                        for i in range(max_wait):
-                            # 方法1: 检查 token 是否已填入
-                            token_val = sb.get_attribute(turnstile_sel, "value")
-                            if token_val:
-                                self.log(f"✅ 扩展已成功获取 Token (耗时 {i}s)")
+                        # 阶段1: 等待扩展自动处理 (20秒)
+                        for i in range(20):
+                            val = sb.get_attribute(turnstile_sel, "value")
+                            if val and len(val) > 20:
+                                self.log("✅ 扩展自动破解成功！")
                                 solved = True
                                 break
-                            
-                            # 方法2: 有时候扩展点完后页面直接刷新或跳转了，检查 Turnstile 是否消失
-                            if not sb.is_element_present(turnstile_sel):
-                                self.log("✅ Turnstile 元素消失，可能已通过")
-                                solved = True
-                                break
-                                
                             time.sleep(1)
+                        
+                        # 阶段2: 如果扩展没动静，尝试“手动”点击 iframe 中心唤醒它
+                        if not solved:
+                            self.log("⚠️ 扩展响应慢，尝试物理唤醒 (UC GUI Click)...")
+                            try:
+                                sb.uc_gui_click_captcha() # SB 自带的 CV 识别点击
+                                time.sleep(5)
+                            except:
+                                pass
+                        
+                        # 阶段3: 继续等待 (再等 60秒)
+                        if not solved:
+                            self.log("⏳ 等待最终结果...")
+                            for i in range(60):
+                                # 检查 Token
+                                val = sb.get_attribute(turnstile_sel, "value")
+                                if val and len(val) > 20:
+                                    self.log("✅ 最终获取到 Token！")
+                                    solved = True
+                                    break
+                                # 检查是否已经跳过验证（元素消失）
+                                if not sb.is_element_present(turnstile_sel):
+                                    self.log("✅ 验证框消失，可能已通过")
+                                    solved = True
+                                    break
+                                time.sleep(1)
 
                         if solved:
+                            # 确保提交
                             time.sleep(2)
-                            # 如果页面没有自动提交，尝试手动提交一次
-                            self.log("🔄 尝试触发提交...")
                             sb.execute_script("document.querySelector('form')?.submit() || document.querySelector('button.bkrtgq')?.click();")
-                            time.sleep(8)
-                            status = "🎉 <b>续期成功 (Extension)</b>"
+                            time.sleep(10)
                         else:
-                            self.log("❌ 扩展处理超时")
-                            status = "❌ <b>Turnstile 处理超时</b>"
-                            sb.save_screenshot(f"turnstile_fail_{srv_id}.png")
-
+                            self.log("❌ 最终破解失败 (超时)")
+                            sb.save_screenshot(f"fail_{srv_id}.png")
+                            status = "❌ <b>Turnstile 超时</b>"
                     else:
-                        self.log("ℹ️ 未触发 Turnstile，可能直接通过")
-                        status = "⚡️ <b>直接通过</b> (未触发盾)"
+                        self.log("⚡️ 未触发验证，直接通过")
                         time.sleep(3)
 
                 except Exception as e:
-                    self.log(f"⚠️ 续期按钮处理异常: {e}")
-                    sb.save_screenshot(f"no_btn_{srv_id}.png")
-                    status = "⏭ <b>未找到按钮或异常</b>"
+                    self.log(f"⚠️ 执行异常: {e}")
+                    status = "⚠️ <b>脚本错误</b>"
 
-                # 验证续期是否成功
-                self.log("🔍 验证续期结果...")
+                # ----------------------
+                # 严格的验证逻辑
+                # ----------------------
+                self.log("🔍 验证最终结果...")
                 sb.refresh()
                 time.sleep(8)
-                sb.wait_for_ready_state_complete(timeout=20)
-                new_days_left, new_expiry = self.get_remaining_days(sb)
+                _, new_expiry = self.get_remaining_days(sb)
                 
-                # 只有当日期确实增加了（或者原本失败了但现在有日期了）才算成功
-                # 注意：如果原本剩余天数很少，续期后 new_days_left 应该变大
-                if new_days_left is not None:
-                     expiry_info = f"📅 新到期: {new_expiry.strftime('%Y-%m-%d %H:%M:%S') if new_expiry else '未知'}\n"
-                     
-                     if days_left is None or new_days_left >= days_left:
-                         self.log("✅ 续期验证通过")
-                     else:
-                         # 日期反而变少了？不太可能，除非解析错误
-                         status = "⚠️ <b>续期存疑（日期未增加）</b>"
+                if new_expiry and old_expiry:
+                    self.log(f"📅 新的到期时间: {new_expiry}")
+                    # 只有时间确实增加了才算成功
+                    if new_expiry > old_expiry:
+                        status = "🎉 <b>续期成功</b>"
+                    elif new_expiry == old_expiry:
+                        status = "⚠️ <b>续期失败 (时间未变)</b>"
+                        sb.save_screenshot(f"fail_renew_{srv_id}.png")
+                    else:
+                        status = "❓ <b>状态未知</b>"
                 else:
-                    self.log("⚠️ 无法获取新日期，可能续期失败")
-                    sb.save_screenshot(f"post_renew_fail_{srv_id}.png")
-                    status = "⚠️ <b>续期失败（验证未通过）</b>"
+                    status = "⚠️ <b>无法读取新日期</b>"
 
-                self.results.append(f"{msg_prefix}{expiry_info}状态: {status}")
+                self.results.append(f"{msg_prefix}状态: {status}")
 
         if self.results:
-            report = "<b>🚀 Weirdhost 自动续期报告 (Ext版)</b>\n\n" + "\n\n".join(self.results)
-            self.send_tg_notification(report)
-        self.log("🏁 所有任务执行完毕")
-
+            self.send_tg_notification("<b>🚀 Weirdhost 续期报告 (Ext版)</b>\n\n" + "\n\n".join(self.results))
+            
 if __name__ == "__main__":
-    bot = WeirdhostPureSB()
-    bot.run()
+    WeirdhostPureSB().run()
