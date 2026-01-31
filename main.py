@@ -163,9 +163,9 @@ class WeirdhostPureSB:
                 days_left, expiry = self.get_remaining_days(sb)
                 expiry_info = f"📅 到期: {expiry.strftime('%Y-%m-%d %H:%M:%S') if expiry else '未知'}\n"
 
-                if days_left is not None and days_left > 4:
-                    self.log(f"⏳ 剩余 {days_left} 天 (>4)，跳过续期")
-                    status = "✅ <b>无需续期</b> (剩余 > 4天)"
+                if days_left is not None and days_left > 9:
+                    self.log(f"⏳ 剩余 {days_left} 天 (>9)，跳过续期")
+                    status = "✅ <b>无需续期</b> (剩余 > 9天)"
                     self.results.append(f"{msg_prefix}{expiry_info}状态: {status}")
                     continue
 
