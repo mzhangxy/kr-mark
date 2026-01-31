@@ -1,4 +1,4 @@
-name: Auto Renewal
+name: Weirdhost Ultimate Auto Renewal
 
 on:
   workflow_dispatch:
@@ -20,15 +20,15 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y google-chrome-stable unzip xvfb libnss3 # 核心依赖
+          sudo apt-get install -y google-chrome-stable unzip xvfb libnss3 libatk-bridge2.0-0
 
       - name: Install Python Dependencies
         run: |
           pip install seleniumbase requests
           sbase install chromedriver
 
-      - name: Setup Xray Proxy
-        # ... 这里保持你原来的 Xray 设置逻辑不变 ...
+      # --- 这里请保留您原来的 Xray Proxy 设置步骤 ---
+      # 注意：确保这一步的缩进与上面的 steps 对齐
 
       - name: Run Renewal Script
         env:
@@ -38,8 +38,8 @@ jobs:
           TG_BOT_TOKEN:           ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID:             ${{ secrets.TG_CHAT_ID }}
         run: |
-          # 关键：开启 1080P 虚拟桌面，确保点击坐标精准
           export DISPLAY=:99
-          Xvfb :99 -screen 0 1920x1080x24 &
+          # 启动虚拟显示并确保它在后台运行
+          Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
           sleep 5
           python main.py
