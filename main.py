@@ -2,253 +2,260 @@ import os
 import time
 import re
 import requests
+import zipfile
+import io
+import shutil
 from datetime import datetime
-from playwright.sync_api import sync_playwright
+from seleniumbase import SB
 
-class WeirdhostUltimate:
+class WeirdhostPureSB:
     def __init__(self):
-        self.api_key = os.getenv('TWOCAPTCHA_API_KEY')
-        self.cookie_value = os.getenv('REMEMBER_WEB_COOKIE')
+        # 移除了 2Captcha API Key，因为不再需要
+        self.cookie_name = 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d'
+        self.cookie_value = os.getenv('REMEMBER_WEB_COOKIE', '')
         self.server_urls = [url.strip() for url in os.getenv('WEIRDHOST_SERVER_URLS', '').split(',') if url.strip()]
-        self.tg_token = os.getenv('TELEGRAM_BOT_TOKEN')
-        self.tg_chat_id = os.getenv('TELEGRAM_CHAT_ID')
-        self.sitekey = "0x4AAAAAACJH5atUUlnM2w2u"
+        self.tg_token = os.getenv('TG_BOT_TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN')
+        self.tg_chat_id = os.getenv('TG_CHAT_ID') or os.getenv('TELEGRAM_CHAT_ID')
         self.results = []
+        
+        # 插件下载配置
+        self.ext_url = "https://github.com/NopeCHALLC/nopecha-extension/releases/download/0.5.5/chromium_automation.zip"
+        self.ext_dir_name = "nopecha_extension"
+
+    def log(self, msg):
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
     def send_tg_notification(self, message):
         if not self.tg_token or not self.tg_chat_id:
-            print("⚠️ 未配置 TG Token 或 Chat ID。")
+            self.log("⚠️ TG 未配置，跳过通知")
             return
-        
-        url = f"https://api.telegram.org/bot{self.tg_token}/sendMessage"
-        payload = {"chat_id": self.tg_chat_id, "text": message, "parse_mode": "Markdown"}
-
-        for i in range(3):
-            try:
-                response = requests.post(url, json=payload, timeout=30)
-                if response.status_code == 200:
-                    print("✅ TG 通知发送成功！")
-                    return
-                else:
-                    print(f"⚠️ TG 响应异常 (尝试 {i+1}/3): {response.status_code}")
-            except Exception as e:
-                print(f"❌ 第 {i+1} 次发送 TG 通知失败: {e}")
-                if i < 2: time.sleep(5) 
-        print("🛑 TG 通知最终发送失败。")
-
-    def get_remaining_days(self, page):
         try:
-            target = page.get_by_text(re.compile(r"202\d-\d{2}-\d{2}")).first
-            target.wait_for(state="visible", timeout=15000)
-            
-            raw_text = target.inner_text()
-            match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', raw_text)
-            if match:
-                expiry_date = datetime.strptime(match.group(1), '%Y-%m-%d %H:%M:%S')
-                return (expiry_date - datetime.now()).days, expiry_date
+            requests.post(
+                f"https://api.telegram.org/bot{self.tg_token}/sendMessage",
+                json={"chat_id": self.tg_chat_id, "text": message, "parse_mode": "HTML"},
+                timeout=10
+            )
+            self.log("📤 TG 通知已发送")
         except Exception as e:
-            print(f"⚠️ 时间解析提示: {e}")
-        return None, None
-    
-    def solve_turnstile(self, page):
-        print("🛡️ 正在请求 2captcha 破解...")
-        in_res = requests.post("https://2captcha.com/in.php", data={
-            'key': self.api_key, 'method': 'turnstile', 'sitekey': self.sitekey,
-            'pageurl': page.url, 'json': 1
-        }).json()
+            self.log(f"❌ TG 发送失败: {e}")
 
-        if in_res.get("status") != 1:
-            print(f"2captcha 提交失败: {in_res}")
-            return False
+    def setup_extension(self):
+        """下载并解压 NopeCHA 扩展"""
+        cwd = os.getcwd()
+        ext_path = os.path.join(cwd, self.ext_dir_name)
 
-        task_id = in_res.get("request")
-        print(f"任务ID: {task_id}")
+        # 如果目录存在且有 manifest.json，假设已下载好
+        if os.path.exists(ext_path) and os.path.exists(os.path.join(ext_path, "manifest.json")):
+            self.log(f"✅ 检测到扩展目录: {ext_path}")
+            return ext_path
+        
+        self.log("⬇️ 正在下载 NopeCHA 扩展...")
+        try:
+            # 清理旧目录（如果有）
+            if os.path.exists(ext_path):
+                shutil.rmtree(ext_path)
+            
+            resp = requests.get(self.ext_url, timeout=30)
+            if resp.status_code == 200:
+                with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
+                    z.extractall(ext_path)
+                self.log(f"✅ 扩展下载并解压成功: {ext_path}")
+                return ext_path
+            else:
+                self.log(f"❌ 下载失败，状态码: {resp.status_code}")
+                return None
+        except Exception as e:
+            self.log(f"❌ 扩展准备失败: {e}")
+            return None
 
-        for _ in range(30):
-            time.sleep(5)
-            res = requests.get(f"https://2captcha.com/res.php?key={self.api_key}&action=get&id={task_id}&json=1").json()
-            print(f"轮询 {_+1}/30: {res}")
-            if res.get("status") == 1:
-                token = res.get("request")
-                print(f"成功获取 token: {token[:30]}...")
-
-                # 注入 token
-                page.evaluate(f'document.querySelector("[name=cf-turnstile-response]").value = "{token}";')
-                page.evaluate('if (typeof cfCallback === "function") { cfCallback(); }')
-
-                # 模拟人类行为：随机鼠标移动 + 延迟
-                import random
-                for _ in range(3):
-                    x = random.randint(100, 800)
-                    y = random.randint(100, 600)
-                    page.mouse.move(x, y)
-                    time.sleep(random.uniform(0.3, 1.2))
-
-                # 再点击一次续期按钮（激活验证）
-                try:
-                    renew_btn = page.locator("button.bkrtgq").first
-                    renew_btn.click()
-                    print("注入后再次点击续期按钮")
-                except:
-                    print("无法再次点击按钮")
-
-                # 等待自动通过
-                page.wait_for_timeout(10000)
-                print("等待 10s 看是否自动通过")
-
-                # 检查是否成功（看是否有续期成功提示文本）
-                success_text = page.get_by_text("续期成功", exact=False).count() > 0 or \
-                               page.get_by_text("SUCCESS", exact=False).count() > 0
-                if success_text:
-                    print("检测到续期成功提示 → 验证通过")
-                    return True
-                else:
-                    print("未检测到成功提示 → 验证失败")
-                    return False
-
-            if res.get("request") != "CAPCHA_NOT_READY":
-                print(f"2captcha 异常: {res.get('request')}")
-                break
-
-        print("破解超时或失败")
-        return False
+    def get_remaining_days(self, sb):
+        try:
+            source = sb.get_page_source()
+            match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', source)
+            if match:
+                expiry_str = match.group(1)
+                expiry = datetime.strptime(expiry_str, '%Y-%m-%d %H:%M:%S')
+                days = (expiry - datetime.now()).days
+                self.log(f"📅 从页面解析到期: {expiry_str}，剩余 {days} 天")
+                return days, expiry
+            self.log("⚠️ 页面上未找到日期格式文本")
+            return None, None
+        except Exception as e:
+            self.log(f"⚠️ 时间解析异常: {str(e)[:80]}")
+            return None, None
 
     def run(self):
-        playwright = None
-        browser = None
-        context = None
-        page = None
+        # 1. 准备扩展路径
+        ext_path = self.setup_extension()
+        if not ext_path:
+            self.log("❌ 无法加载扩展，终止运行")
+            return
 
-        try:
-            print("🌐 启动浏览器...")
-            proxy_settings = {
-                "server": "socks5://127.0.0.1:10808",
-            }
-
-            playwright = sync_playwright().start()  # 手动启动 playwright
-            browser = playwright.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                proxy=proxy_settings,
-            )
-
-            context.add_cookies([{
-                'name': 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d',
-                'value': self.cookie_value,
-                'domain': 'hub.weirdhost.xyz', 'path': '/', 'httpOnly': True, 'secure': True
-            }])
-
-            page = context.new_page()
-            
-            print("📡 验证代理出口 IP...")
+        self.log("🌐 启动 SeleniumBase UC 模式 (带扩展)...")
+        
+        # 2. 在 SB 初始化中加入 extension_dir
+        with SB(uc=True, xvfb=True, headless2=True, proxy="127.0.0.1:10808", extension_dir=ext_path) as sb:
+            # 验证代理
+            self.log("📡 验证出口 IP...")
             try:
-                page.goto("https://api.ipify.org", timeout=30000)
-                ip_text = page.inner_text("body").strip()
-                print(f"当前出口 IP: {ip_text}")
-                
-                if "211.221" not in ip_text:
-                    raise Exception(f"代理未生效！当前 IP: {ip_text} （期望包含 211.221）")
-                print("✅ 代理验证通过")
-            except Exception as e:
-                print(f"❌ 代理验证失败: {e}")
-                browser.close()
-                raise
+                sb.get("https://api.ipify.org")
+                time.sleep(5)
+                ip = sb.get_text("body").strip()
+                self.log(f"✅ 代理 IP: {ip}")
+            except:
+                self.log("⚠️ 无法获取 IP，继续尝试...")
 
-            # --- 业务逻辑开始 ---
+            # 等待一小会儿让扩展初始化
+            time.sleep(3)
+
             for url in self.server_urls:
                 srv_id = url.split('/')[-1]
                 msg_prefix = f"🖥 <b>服务器: {srv_id}</b>\n"
+                self.log(f"\n🚀 处理服务器: {srv_id}")
+
+                # 进入域名上下文
+                self.log("🔗 进入域名中...")
+                sb.uc_open("https://hub.weirdhost.xyz/login")  
+                time.sleep(8)
+                sb.wait_for_ready_state_complete(timeout=15)
+
+                current_url_lower = sb.get_current_url().lower()
+                if "weirdhost.xyz" not in current_url_lower:
+                    self.log(f"⚠️ 域名不匹配: {sb.get_current_url()}")
+                    sb.save_screenshot(f"proxy_err_{srv_id}.png")
+                    self.results.append(f"{msg_prefix}状态: ❌ 代理/域名失败")
+                    continue
+
+                # 注入 Cookie
+                self.log("🔑 注入 Cookie...")
                 try:
-                    print(f"\n🚀 目标服务器: {url}")
-                    page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                    time.sleep(5)
-
-                    # 1. 检查到期时间
-                    days_left, expiry_date = self.get_remaining_days(page)
-                    expiry_info = f"📅 到期: {expiry_date if expiry_date else '未知'}\n"
-                    
-                    if days_left is not None:
-                        print(f"📅 到期时间: {expiry_date}")
-                        print(f"⏳ 剩余天数: {days_left} 天")
-                        if days_left > 6:
-                            print("✅ 剩余时间充裕 (>6天)，跳过续期。")
-                            status = "✅ <b>无需续期</b> (剩余 > 6天)"
-                            self.results.append(f"{msg_prefix}{expiry_info}状态: {status}")
-                            continue
-                    else:
-                        print("⚠️ 未能识别到期时间，将尝试续期流程。")
-
-                    # 2. 点击续期按钮
-                    renew_btn = page.locator("button.bkrtgq").first
-                    if renew_btn.is_visible():
-                        print("鼠标 找到续期按钮，准备操作...")
-                        renew_btn.click()
-                        page.wait_for_timeout(3000)
-                        
-                        if page.locator("[name='cf-turnstile-response']").count() > 0:
-                            print("🕒 检测到 Turnstile 验证槽位 (Invisible 模式)...")
-                            if self.solve_turnstile(page):
-                                print("⏳ 注入成功，等待系统响应...")
-                                page.wait_for_timeout(7000)
-                                print("🎉 续期操作已完成！")
-                                status = "🎉 <b>续期成功!</b>"
-                            else:
-                                print("❌ 验证码破解失败或超时。")
-                                status = "❌ <b>破解失败</b>"
-                        else:
-                            print("ℹ️ 未发现验证码输入框，可能已直接通过验证。")
-                            status = "⚡️ <b>直接通过</b> (未触发盾)"
-                            page.wait_for_timeout(3000)
-                    else:
-                        print("⏭️ 页面上未找到续期按钮。")
-                        status = "⏭ <b>未找到按钮，请登录检查验证</b>"
-                    
-                    self.results.append(f"{msg_prefix}{expiry_info}状态: {status}")
-                        
+                    sb.add_cookie({
+                        'name': self.cookie_name,
+                        'value': self.cookie_value,
+                        'domain': 'hub.weirdhost.xyz',
+                        'path': '/',
+                        'httpOnly': True,
+                        'secure': True
+                    })
+                    sb.refresh()
+                    self.log("✅ Cookie 注入完成")
                 except Exception as e:
-                    self.results.append(f"{msg_prefix}❌ <b>运行异常</b>: {str(e)[:50]}")
-            
-            browser.close()
-            print("\n🏁 所有任务执行完毕。")
+                    self.log(f"❌ Cookie 注入失败: {e}")
+                    self.results.append(f"{msg_prefix}状态: ❌ Cookie 注入失败")
+                    continue
 
-            if self.results:
-                full_message = "<b>🚀 Weirdhost 自动续期报告</b>\n\n" + "\n\n".join(self.results)
-                self.send_tg_notification(full_message)
+                # 访问目标服务器页
+                sb.get(url)
+                time.sleep(10)
+                sb.wait_for_ready_state_complete(timeout=15)
 
-        except Exception as e:
-            print(f"❌ 运行异常: {e}")
-            if page:
-                try:
-                    page.screenshot(path="error_screenshot.png")
-                    print("已保存错误截图: error_screenshot.png")
-                except:
-                    pass
-            raise  # 让 workflow 标记失败
+                # 检查是否成功进入后台
+                source = sb.get_page_source()
+                if "시간추가" not in source and not re.search(r'202\d-\d{2}-\d{2}', source):
+                    self.log("🛡️ 状态异常")
+                    sb.save_screenshot(f"status_err_{srv_id}.png")
+                    self.results.append(f"{msg_prefix}状态: ❌ 进入后台失败")
+                    continue
 
-        finally:
-            # 安全清理资源
-            print("🧹 清理浏览器资源...")
-            if page:
+                self.log("✅ 成功进入后台")
+
+                # 解析剩余天数
+                days_left, expiry = self.get_remaining_days(sb)
+                expiry_info = f"📅 到期: {expiry.strftime('%Y-%m-%d %H:%M:%S') if expiry else '未知'}\n"
+
+                if days_left is not None and days_left > 4:
+                    self.log(f"⏳ 剩余 {days_left} 天 (>4)，跳过续期")
+                    status = "✅ <b>无需续期</b> (剩余 > 4天)"
+                    self.results.append(f"{msg_prefix}{expiry_info}状态: {status}")
+                    continue
+
+                # 尝试续期
+                self.log("🔄 尝试续期...")
+                renew_sel = 'button.bkrtgq'
                 try:
-                    page.close()
-                except:
-                    pass
-            if context:
-                try:
-                    context.close()
-                except:
-                    pass
-            if browser:
-                try:
-                    browser.close()
-                except:
-                    pass
-            if playwright:
-                try:
-                    playwright.stop()
-                except:
-                    pass
+                    sb.wait_for_element_visible(renew_sel, timeout=12)
+                    sb.click(renew_sel)
+                    time.sleep(5) # 给一点时间让弹窗或挑战出现
+
+                    # 处理 Turnstile
+                    turnstile_sel = '[name="cf-turnstile-response"]'
+                    
+                    # 检查是否存在 Turnstile 元素
+                    if sb.is_element_present(turnstile_sel):
+                        self.log("🕒 检测到 Turnstile，等待 NopeCHA 扩展自动处理...")
+                        
+                        # 这里我们不需要调用 API，而是等待扩展完成工作
+                        # 扩展成功后，通常 token 输入框会有值，或者表单会自动提交
+                        
+                        max_wait = 40
+                        solved = False
+                        for i in range(max_wait):
+                            # 方法1: 检查 token 是否已填入
+                            token_val = sb.get_attribute(turnstile_sel, "value")
+                            if token_val:
+                                self.log(f"✅ 扩展已成功获取 Token (耗时 {i}s)")
+                                solved = True
+                                break
+                            
+                            # 方法2: 有时候扩展点完后页面直接刷新或跳转了，检查 Turnstile 是否消失
+                            if not sb.is_element_present(turnstile_sel):
+                                self.log("✅ Turnstile 元素消失，可能已通过")
+                                solved = True
+                                break
+                                
+                            time.sleep(1)
+
+                        if solved:
+                            time.sleep(2)
+                            # 如果页面没有自动提交，尝试手动提交一次
+                            self.log("🔄 尝试触发提交...")
+                            sb.execute_script("document.querySelector('form')?.submit() || document.querySelector('button.bkrtgq')?.click();")
+                            time.sleep(8)
+                            status = "🎉 <b>续期成功 (Extension)</b>"
+                        else:
+                            self.log("❌ 扩展处理超时")
+                            status = "❌ <b>Turnstile 处理超时</b>"
+                            sb.save_screenshot(f"turnstile_fail_{srv_id}.png")
+
+                    else:
+                        self.log("ℹ️ 未触发 Turnstile，可能直接通过")
+                        status = "⚡️ <b>直接通过</b> (未触发盾)"
+                        time.sleep(3)
+
+                except Exception as e:
+                    self.log(f"⚠️ 续期按钮处理异常: {e}")
+                    sb.save_screenshot(f"no_btn_{srv_id}.png")
+                    status = "⏭ <b>未找到按钮或异常</b>"
+
+                # 验证续期是否成功
+                self.log("🔍 验证续期结果...")
+                sb.refresh()
+                time.sleep(8)
+                sb.wait_for_ready_state_complete(timeout=20)
+                new_days_left, new_expiry = self.get_remaining_days(sb)
+                
+                # 只有当日期确实增加了（或者原本失败了但现在有日期了）才算成功
+                # 注意：如果原本剩余天数很少，续期后 new_days_left 应该变大
+                if new_days_left is not None:
+                     expiry_info = f"📅 新到期: {new_expiry.strftime('%Y-%m-%d %H:%M:%S') if new_expiry else '未知'}\n"
+                     
+                     if days_left is None or new_days_left >= days_left:
+                         self.log("✅ 续期验证通过")
+                     else:
+                         # 日期反而变少了？不太可能，除非解析错误
+                         status = "⚠️ <b>续期存疑（日期未增加）</b>"
+                else:
+                    self.log("⚠️ 无法获取新日期，可能续期失败")
+                    sb.save_screenshot(f"post_renew_fail_{srv_id}.png")
+                    status = "⚠️ <b>续期失败（验证未通过）</b>"
+
+                self.results.append(f"{msg_prefix}{expiry_info}状态: {status}")
+
+        if self.results:
+            report = "<b>🚀 Weirdhost 自动续期报告 (Ext版)</b>\n\n" + "\n\n".join(self.results)
+            self.send_tg_notification(report)
+        self.log("🏁 所有任务执行完毕")
 
 if __name__ == "__main__":
-    bot = WeirdhostUltimate()
+    bot = WeirdhostPureSB()
     bot.run()
