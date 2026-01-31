@@ -40,18 +40,27 @@ class WeirdhostUltimateBot:
         if not self.api_key_2captcha: return None
         self.log("💰 正在启动 2Captcha 有偿破解...")
         try:
+            # 增加 json=1 确保返回 json
             resp = requests.post("http://2captcha.com/in.php", data={
                 'key': self.api_key_2captcha, 'method': 'turnstile',
                 'sitekey': self.sitekey, 'pageurl': page_url, 'json': 1
             }, timeout=20).json()
-            if resp.get('status') != 1: return None
+            if resp.get('status') != 1: 
+                self.log(f"❌ 2Captcha 提交失败: {resp.get('request')}")
+                return None
+            
             task_id = resp.get('request')
-            for _ in range(35):
+            # 轮询 120 秒 (24 * 5s)
+            for _ in range(24):
                 time.sleep(5)
-                res = requests.get(f"http://2captcha.com/res.php?key={self.api_key_2captcha}&action=get&id={task_id}&json=1").json()
+                res = requests.get(f"http://2captcha.com/res.php?key={self.api_key_2captcha}&action=get&id={task_id}&json=1", timeout=20).json()
                 if res.get('status') == 1: return res.get('request')
+                if res.get('request') == 'CAPCHA_NOT_READY': continue
+                self.log(f"⚠️ 2Captcha 状态: {res.get('request')}")
             return None
-        except: return None
+        except Exception as e:
+            self.log(f"❌ 2Captcha 请求异常: {e}")
+            return None
 
     def get_remaining_days(self, sb):
         try:
@@ -65,7 +74,7 @@ class WeirdhostUltimateBot:
 
     def run(self):
         ext_path = self.setup_extension()
-        # 切换到 headless=True 以获得更好的 JS 兼容性
+        # 使用 uc=True 模式
         with SB(uc=True, xvfb=True, headless=True, proxy="127.0.0.1:10808", extension_dir=ext_path) as sb:
             for url in self.server_urls:
                 srv_id = url.split('/')[-1]
@@ -87,7 +96,7 @@ class WeirdhostUltimateBot:
                     renew_btn = 'button.bkrtgq'
                     if sb.is_element_visible(renew_btn):
                         sb.click(renew_btn)
-                        self.log("🔄 已点击续期按钮，正在处理验证...")
+                        self.log("🔄 已点击续期，正在处理 CF 验证...")
                         time.sleep(5)
                         
                         token_input_name = "cf-turnstile-response"
@@ -108,7 +117,7 @@ class WeirdhostUltimateBot:
                         for _ in range(30):
                             token = sb.get_attribute(f'[name="{token_input_name}"]', "value")
                             if token and len(token) > 20:
-                                self.log("✅ 扩展自动填充成功")
+                                self.log("✅ 扩展破解成功")
                                 solved = True; break
                             time.sleep(1)
                         
@@ -116,40 +125,39 @@ class WeirdhostUltimateBot:
                         if not solved:
                             api_token = self.solve_with_2captcha(sb.get_current_url())
                             if api_token:
-                                self.log("💉 正在注入 Token 并触发回调...")
-                                # 修复：不再使用 arguments[0]，改用模板字符串注入，并增加回调触发逻辑
+                                self.log("💉 正在注入 2Captcha Token...")
+                                # 安全注入逻辑：只填充值，移除导致错误的 callback 调用
                                 inject_script = f"""
                                 (function() {{
                                     const token = "{api_token}";
-                                    // 1. 填充隐藏输入框
                                     const inputs = document.getElementsByName("{token_input_name}");
                                     if (inputs.length > 0) {{
                                         inputs[0].value = token;
+                                        console.log("Token injected successfully.");
                                     }}
-                                    // 2. 尝试寻找并执行隐式回调 (Turnstile 常用逻辑)
-                                    if (window.cf_callback) {{ window.cf_callback(token); }}
-                                    if (window.turnstile) {{ window.turnstile.setResponse(token); }}
                                 }})();
                                 """
                                 sb.execute_script(inject_script)
                                 solved = True
 
                         if solved:
-                            self.log("🚀 提交表单中...")
-                            sb.execute_script("document.querySelector('form')?.submit();")
+                            self.log("🚀 尝试提交续期...")
+                            # 尝试两种提交方式：点击按钮或直接提交 form
+                            sb.execute_script("document.querySelector('form')?.submit() || document.querySelector('button.bkrtgq')?.click();")
                             time.sleep(10)
                             sb.refresh()
+                            time.sleep(3)
                             _, new_expiry = self.get_remaining_days(sb)
                             status = "🎉 成功" if new_expiry and old_expiry and new_expiry > old_expiry else "❌ 失败"
                         else:
-                            status = "❌ 验证超时"
+                            status = "❌ 验证未通过"
                         
                         self.results.append(f"🖥 <b>{srv_id}</b>: {status}")
                 except Exception as e:
                     self.log(f"⚠️ 异常: {e}")
 
         if self.results and self.tg_token:
-            report = "<b>🚀 终极续期报告</b>\n\n" + "\n".join(self.results)
+            report = "<b>🚀 续期报告</b>\n\n" + "\n".join(self.results)
             requests.post(f"https://api.telegram.org/bot{self.tg_token}/sendMessage", 
                           json={"chat_id": self.tg_chat_id, "text": report, "parse_mode": "HTML"})
 
