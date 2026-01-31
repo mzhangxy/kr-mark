@@ -46,7 +46,7 @@ class WeirdhostUltimateBot:
             }, timeout=20).json()
             if resp.get('status') != 1: return None
             task_id = resp.get('request')
-            for _ in range(30):
+            for _ in range(35):
                 time.sleep(5)
                 res = requests.get(f"http://2captcha.com/res.php?key={self.api_key_2captcha}&action=get&id={task_id}&json=1").json()
                 if res.get('status') == 1: return res.get('request')
@@ -65,8 +65,8 @@ class WeirdhostUltimateBot:
 
     def run(self):
         ext_path = self.setup_extension()
-        # 强制设置代理和无头模式
-        with SB(uc=True, xvfb=True, headless2=True, proxy="127.0.0.1:10808", extension_dir=ext_path) as sb:
+        # 切换到 headless=True 以获得更好的 JS 兼容性
+        with SB(uc=True, xvfb=True, headless=True, proxy="127.0.0.1:10808", extension_dir=ext_path) as sb:
             for url in self.server_urls:
                 srv_id = url.split('/')[-1]
                 self.log(f"\n🚀 处理服务器: {srv_id}")
@@ -87,13 +87,13 @@ class WeirdhostUltimateBot:
                     renew_btn = 'button.bkrtgq'
                     if sb.is_element_visible(renew_btn):
                         sb.click(renew_btn)
-                        self.log("🔄 已触发续期弹窗，开始破解 CF 盾...")
+                        self.log("🔄 已点击续期按钮，正在处理验证...")
                         time.sleep(5)
                         
-                        token_input = '[name="cf-turnstile-response"]'
+                        token_input_name = "cf-turnstile-response"
                         solved = False
                         
-                        # 1. Iframe 尝试
+                        # 1. 尝试物理激活 (Iframe 点击)
                         try:
                             iframes = sb.find_elements("iframe")
                             for frame in iframes:
@@ -104,38 +104,52 @@ class WeirdhostUltimateBot:
                                     break
                         except: sb.switch_to_default_content()
                         
-                        # 2. 等待扩展
+                        # 2. 等待扩展自动填充
                         for _ in range(30):
-                            token = sb.get_attribute(token_input, "value")
+                            token = sb.get_attribute(f'[name="{token_input_name}"]', "value")
                             if token and len(token) > 20:
+                                self.log("✅ 扩展自动填充成功")
                                 solved = True; break
                             time.sleep(1)
                         
-                        # 3. 2Captcha 保底 (修复注入逻辑)
+                        # 3. 2Captcha 强力保底
                         if not solved:
                             api_token = self.solve_with_2captcha(sb.get_current_url())
                             if api_token:
-                                # 核心修复：使用参数化注入，避免 SyntaxError
-                                sb.execute_script('document.getElementsByName("cf-turnstile-response")[0].value = arguments[0];', api_token)
-                                self.log("✅ 2Captcha Token 已安全注入")
+                                self.log("💉 正在注入 Token 并触发回调...")
+                                # 修复：不再使用 arguments[0]，改用模板字符串注入，并增加回调触发逻辑
+                                inject_script = f"""
+                                (function() {{
+                                    const token = "{api_token}";
+                                    // 1. 填充隐藏输入框
+                                    const inputs = document.getElementsByName("{token_input_name}");
+                                    if (inputs.length > 0) {{
+                                        inputs[0].value = token;
+                                    }}
+                                    // 2. 尝试寻找并执行隐式回调 (Turnstile 常用逻辑)
+                                    if (window.cf_callback) {{ window.cf_callback(token); }}
+                                    if (window.turnstile) {{ window.turnstile.setResponse(token); }}
+                                }})();
+                                """
+                                sb.execute_script(inject_script)
                                 solved = True
 
                         if solved:
-                            # 强制提交
+                            self.log("🚀 提交表单中...")
                             sb.execute_script("document.querySelector('form')?.submit();")
                             time.sleep(10)
                             sb.refresh()
                             _, new_expiry = self.get_remaining_days(sb)
                             status = "🎉 成功" if new_expiry and old_expiry and new_expiry > old_expiry else "❌ 失败"
                         else:
-                            status = "❌ 验证未过"
+                            status = "❌ 验证超时"
                         
                         self.results.append(f"🖥 <b>{srv_id}</b>: {status}")
                 except Exception as e:
                     self.log(f"⚠️ 异常: {e}")
 
         if self.results and self.tg_token:
-            report = "<b>🚀 续期报告</b>\n\n" + "\n".join(self.results)
+            report = "<b>🚀 终极续期报告</b>\n\n" + "\n".join(self.results)
             requests.post(f"https://api.telegram.org/bot{self.tg_token}/sendMessage", 
                           json={"chat_id": self.tg_chat_id, "text": report, "parse_mode": "HTML"})
 
