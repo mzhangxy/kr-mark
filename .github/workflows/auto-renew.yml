@@ -1,4 +1,4 @@
-name: Weirdhost Ultimate Auto Renewal
+name: Auto Renewal
 
 on:
   workflow_dispatch:
