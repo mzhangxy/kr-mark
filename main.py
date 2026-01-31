@@ -70,7 +70,6 @@ class WeirdhostPureSB:
             return
 
         self.log("🌐 启动 SeleniumBase UC 模式 (带扩展)...")
-        # 增加 incognito=True 有时能避开部分缓存检测，但在扩展模式下慎用（有些扩展不支持）
         with SB(uc=True, xvfb=True, headless2=True, proxy="127.0.0.1:10808", extension_dir=ext_path) as sb:
             
             # 验证代理
@@ -85,7 +84,6 @@ class WeirdhostPureSB:
                 srv_id = url.split('/')[-1]
                 msg_prefix = f"🖥 <b>服务器: {srv_id}</b>\n"
                 
-                # 登录流程
                 self.log(f"\n🚀 处理服务器: {srv_id}")
                 sb.uc_open("https://hub.weirdhost.xyz/login")
                 time.sleep(5)
@@ -95,20 +93,22 @@ class WeirdhostPureSB:
                 sb.get(url)
                 time.sleep(8)
                 
-                # 初始状态检查
                 days_left, old_expiry = self.get_remaining_days(sb)
                 if old_expiry:
-                    self.log(f"📅 当前到期: {old_expiry}")
+                    self.log(f"📅 当前到期: {old_expiry} (剩余 {days_left} 天)")
                 
-                if days_left is not None and days_left > 4:
+                # 【修改点】: 临时改为 > 30 天，或者直接注释掉整个 if 块，强制它去尝试续期
+                if days_left is not None and days_left > 30: 
+                    self.log(f"✅ 剩余天数充足 ({days_left}天)，跳过续期") # 增加这行日志
                     self.results.append(f"{msg_prefix}状态: ✅ 无需续期 (剩余 {days_left} 天)")
                     continue
 
-                # 执行续期
+                # --- 开始执行续期 ---
                 try:
                     renew_sel = 'button.bkrtgq'
                     if not sb.is_element_visible(renew_sel):
                         self.log("❌ 未找到续期按钮")
+                        sb.save_screenshot(f"no_btn_{srv_id}.png") # 没找到按钮也要截图
                         self.results.append(f"{msg_prefix}状态: ❌ 未找到按钮")
                         continue
 
@@ -116,9 +116,7 @@ class WeirdhostPureSB:
                     self.log("🔄 已点击续期按钮，等待处理...")
                     time.sleep(5)
 
-                    # ----------------------
-                    # 新的过盾逻辑 (混合模式)
-                    # ----------------------
+                    # 混合过盾逻辑
                     turnstile_sel = '[name="cf-turnstile-response"]'
                     if sb.is_element_present(turnstile_sel):
                         self.log("🛡️ 检测到 Turnstile，开始混合破解...")
@@ -133,26 +131,24 @@ class WeirdhostPureSB:
                                 break
                             time.sleep(1)
                         
-                        # 阶段2: 如果扩展没动静，尝试“手动”点击 iframe 中心唤醒它
+                        # 阶段2: 物理唤醒
                         if not solved:
                             self.log("⚠️ 扩展响应慢，尝试物理唤醒 (UC GUI Click)...")
                             try:
-                                sb.uc_gui_click_captcha() # SB 自带的 CV 识别点击
+                                sb.uc_gui_click_captcha()
                                 time.sleep(5)
                             except:
                                 pass
                         
-                        # 阶段3: 继续等待 (再等 60秒)
+                        # 阶段3: 继续等待 (60秒)
                         if not solved:
                             self.log("⏳ 等待最终结果...")
                             for i in range(60):
-                                # 检查 Token
                                 val = sb.get_attribute(turnstile_sel, "value")
                                 if val and len(val) > 20:
                                     self.log("✅ 最终获取到 Token！")
                                     solved = True
                                     break
-                                # 检查是否已经跳过验证（元素消失）
                                 if not sb.is_element_present(turnstile_sel):
                                     self.log("✅ 验证框消失，可能已通过")
                                     solved = True
@@ -160,7 +156,6 @@ class WeirdhostPureSB:
                                 time.sleep(1)
 
                         if solved:
-                            # 确保提交
                             time.sleep(2)
                             sb.execute_script("document.querySelector('form')?.submit() || document.querySelector('button.bkrtgq')?.click();")
                             time.sleep(10)
@@ -171,14 +166,13 @@ class WeirdhostPureSB:
                     else:
                         self.log("⚡️ 未触发验证，直接通过")
                         time.sleep(3)
+                        status = "⚡️ <b>直接通过</b>" # 临时状态
 
                 except Exception as e:
                     self.log(f"⚠️ 执行异常: {e}")
                     status = "⚠️ <b>脚本错误</b>"
 
-                # ----------------------
-                # 严格的验证逻辑
-                # ----------------------
+                # 验证逻辑
                 self.log("🔍 验证最终结果...")
                 sb.refresh()
                 time.sleep(8)
@@ -186,12 +180,11 @@ class WeirdhostPureSB:
                 
                 if new_expiry and old_expiry:
                     self.log(f"📅 新的到期时间: {new_expiry}")
-                    # 只有时间确实增加了才算成功
                     if new_expiry > old_expiry:
                         status = "🎉 <b>续期成功</b>"
                     elif new_expiry == old_expiry:
                         status = "⚠️ <b>续期失败 (时间未变)</b>"
-                        sb.save_screenshot(f"fail_renew_{srv_id}.png")
+                        sb.save_screenshot(f"fail_renew_{srv_id}.png") # 失败截图
                     else:
                         status = "❓ <b>状态未知</b>"
                 else:
